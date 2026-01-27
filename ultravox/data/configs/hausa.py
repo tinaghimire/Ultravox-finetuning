@@ -4,20 +4,49 @@ from ultravox.data import types
 # Get the directory where this config file is located
 _CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
 # Path to dataset files within ultravox directory
-_ULTRAVOX_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_CONFIG_DIR)))
-HAUSA_DATASET_DIR = os.path.join(_ULTRAVOX_ROOT, "ultravox", "data", "datasets", "hausa")
+_ULTRAVOX_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(_CONFIG_DIR))
+)
 
 # Hugging Face dataset configuration for audio files
-HAUSA_HF_DATASET_NAME = "naijavoices/naijavoices-dataset"
-HAUSA_HF_BATCH_CONFIGS = ["hausa-batch-0", "hausa-batch-1", "hausa-batch-2"]
+# Can be overridden via environment variable HAUSA_HF_DATASET_NAME
+# Example: export HAUSA_HF_DATASET_NAME="your-username/your-dataset"
+HAUSA_HF_DATASET_NAME = "bataju/hausa-audio-dataset-large-v0"
 
-# Individual batch file paths (now in ultravox directory)
-HAUSA_BATCH_0_PATH = os.path.join(HAUSA_DATASET_DIR, "conversation_pairs_completed_batch_0.json")
-HAUSA_BATCH_1_PATH = os.path.join(HAUSA_DATASET_DIR, "conversation_pairs_completed_batch_1.json")
-HAUSA_BATCH_2_PATH = os.path.join(HAUSA_DATASET_DIR, "conversation_pairs_completed_batch_2.json")
+# Batch configs - set to None or empty list if dataset has no batch structure
+# If None, audio files are loaded directly from dataset root
+HAUSA_HF_BATCH_CONFIGS = None  # No batch structure - load from dataset root
+# Alternative with batches:
+# HAUSA_HF_BATCH_CONFIGS = [
+#     "hausa-batch-0", "hausa-batch-1", "hausa-batch-2"
+# ]
+
+# JSON metadata file paths - loaded from HuggingFace with local fallback
+# Paths are set to special markers that trigger HF loading in HausaHFDataset
+# If not found in HF, falls back to local files in
+# ultravox/data/datasets/hausa/
+HAUSA_DATASET_DIR = os.path.join(
+    _ULTRAVOX_ROOT, "ultravox", "data", "datasets", "hausa"
+)
+HAUSA_BATCH_0_PATH = "hf://conversation_pairs_completed_batch_0.json"
+HAUSA_BATCH_1_PATH = "hf://conversation_pairs_completed_batch_1.json"
+HAUSA_BATCH_2_PATH = "hf://conversation_pairs_completed_batch_2.json"
+
+# Local fallback paths (used if JSON not found in HuggingFace)
+HAUSA_LOCAL_BATCH_0_PATH = os.path.join(
+    HAUSA_DATASET_DIR, "conversation_pairs_completed_batch_0.json"
+)
+HAUSA_LOCAL_BATCH_1_PATH = os.path.join(
+    HAUSA_DATASET_DIR, "conversation_pairs_completed_batch_1.json"
+)
+HAUSA_LOCAL_BATCH_2_PATH = os.path.join(
+    HAUSA_DATASET_DIR, "conversation_pairs_completed_batch_2.json"
+)
 
 # Combined path for all batches (comma-separated)
-HAUSA_ALL_BATCHES_PATH = f"{HAUSA_BATCH_0_PATH},{HAUSA_BATCH_1_PATH},{HAUSA_BATCH_2_PATH}"
+HAUSA_ALL_BATCHES_PATH = (
+    f"{HAUSA_BATCH_0_PATH},{HAUSA_BATCH_1_PATH},{HAUSA_BATCH_2_PATH}"
+)
 
 # Base config for Hausa conversation dataset
 HAUSA_BASE_CONFIG = types.DatasetConfig(
@@ -30,7 +59,8 @@ HAUSA_BASE_CONFIG = types.DatasetConfig(
     # Evaluation config: Use BLEU and WER for Hausa conversation responses
     eval_config=types.EvalConfig(
         metric="bleu",  # BLEU score for response quality
-        args={"tokenize": "none"},  # No tokenization for Hausa (or use appropriate tokenizer)
+        # No tokenization for Hausa (or use appropriate tokenizer)
+        args={"tokenize": "none"},
     ),
 )
 
@@ -42,8 +72,8 @@ HAUSA_TRAIN_CONFIG = types.DatasetConfig(
     path=HAUSA_ALL_BATCHES_PATH,
     splits=[
         types.DatasetSplitConfig(
-            name="train", 
-            num_samples=50,  # Will be calculated dynamically (80% of total)
+            name="train",
+            num_samples=-1,  # Will be calculated dynamically (80% of total)
             split=types.DatasetSplit.TRAIN
         ),
     ],
@@ -56,7 +86,7 @@ HAUSA_VAL_CONFIG = types.DatasetConfig(
     splits=[
         types.DatasetSplitConfig(
             name="validation",
-            num_samples=10,  # Will be calculated dynamically (10% of total)
+            num_samples=-1,  # Will be calculated dynamically (10% of total)
             split=types.DatasetSplit.VALIDATION
         ),
     ],
@@ -69,7 +99,7 @@ HAUSA_TEST_CONFIG = types.DatasetConfig(
     splits=[
         types.DatasetSplitConfig(
             name="test",
-            num_samples=10,  # Will be calculated dynamically (10% of total)
+            num_samples=-1,  # Will be calculated dynamically (10% of total)
             split=types.DatasetSplit.TEST
         ),
     ],
@@ -81,4 +111,3 @@ configs = [
     HAUSA_VAL_CONFIG,
     HAUSA_TEST_CONFIG,
 ]
-
