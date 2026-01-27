@@ -475,9 +475,10 @@ class GenericDataset(VoiceDataset):
 class HausaHFDataset(VoiceDataset):
     """
     Dataset class for Hausa dataset that loads:
-    - Transcript/response pairs from local JSON files
-    - Audio files from Hugging Face dataset (naijavoices/naijavoices-dataset)
+    - Transcript/response pairs from JSON files in HuggingFace dataset
+    - Audio files from Hugging Face dataset
     
+    JSON files are loaded from HuggingFace (json_file_path should start with "hf://").
     Only includes audio files whose audio_path matches entries in the JSON files.
     """
     
@@ -487,20 +488,36 @@ class HausaHFDataset(VoiceDataset):
         config: types.DatasetConfig,
         json_file_path: str,
         hf_dataset_name: str,
-        hf_batch_configs: List[str],
+        hf_batch_configs: Optional[List[str]],
     ) -> None:
         """
         Args:
             args: VoiceDatasetArgs for dataset configuration
             config: DatasetConfig with templates and settings
-            json_file_path: Path to the local JSON file(s) (comma-separated)
+            json_file_path: Path to JSON file(s) in HF dataset (comma-separated, must start with "hf://")
             hf_dataset_name: Hugging Face dataset name (e.g., "naijavoices/naijavoices-dataset")
-            hf_batch_configs: List of HF dataset configs (e.g., ["hausa-batch-0", "hausa-batch-1", "hausa-batch-2"])
+            hf_batch_configs: List of HF dataset configs, or None if no batch structure
+                If None, audio files are loaded directly from dataset root
+                If provided, e.g., ["hausa-batch-0", "hausa-batch-1", "hausa-batch-2"]
         """
         super().__init__(args)
         self._config = config
         self._hf_dataset_name = hf_dataset_name
-        self._hf_batch_configs = hf_batch_configs
+        self._hf_batch_configs = hf_batch_configs if hf_batch_configs else []
+        
+        # Import hausa config to get local fallback paths
+        from ultravox.data.configs import hausa
+        self._local_json_paths = {
+            "conversation_pairs_completed_batch_0.json": (
+                hausa.HAUSA_LOCAL_BATCH_0_PATH
+            ),
+            "conversation_pairs_completed_batch_1.json": (
+                hausa.HAUSA_LOCAL_BATCH_1_PATH
+            ),
+            "conversation_pairs_completed_batch_2.json": (
+                hausa.HAUSA_LOCAL_BATCH_2_PATH
+            ),
+        }
         
         # Handle multiple JSON files
         if isinstance(json_file_path, str):
@@ -522,20 +539,50 @@ class HausaHFDataset(VoiceDataset):
         else:
             json_ds = json_datasets[0]
         
-        # Store HF dataset configs for lazy loading during iteration
-        # We'll load audio on-demand and filter during iteration instead of upfront
+        # Store HF dataset configs
         self._hf_dataset_name = hf_dataset_name
         self._hf_batch_configs = hf_batch_configs
         
-        # Store JSON dataset (no upfront filtering - will filter during iteration)
-        self._json_dataset = json_ds
-        
-        # Cache for HF dataset lookups (lazy loading)
+        # Cache for HF dataset lookups
         self._hf_audio_cache = {}  # audio_filename -> HF dataset row
         self._hf_datasets_loaded = False
         self._hf_audio_indices = {}  # audio_filename -> (batch_idx, hf_idx)
         
-        # We'll build the mapping lazily during first iteration or when needed
+        # Build audio index upfront to filter JSON entries
+        # This ensures we only split entries that have matching audio
+        print("Building audio index from HuggingFace dataset...")
+        self._load_hf_datasets_if_needed()
+        print(
+            f"Found {len(self._hf_audio_indices)} audio files in "
+            f"HuggingFace dataset"
+        )
+        
+        # Filter JSON dataset to only include entries with matching audio
+        if self._args.include_audio:
+            print(
+                "Filtering JSON entries to match audio files in HF dataset..."
+            )
+            audio_field = self._config.audio_field or "audio_path"
+            
+            def has_matching_audio(row):
+                """Check if row has audio file in HF dataset."""
+                audio_path = row.get(audio_field, "")
+                audio_filename = (
+                    os.path.basename(audio_path) if audio_path else ""
+                )
+                return audio_filename in self._hf_audio_indices
+            
+            # Filter dataset to only keep rows with matching audio
+            json_ds = json_ds.filter(has_matching_audio)
+            total_before = (
+                len(json_datasets[0])
+                if len(json_datasets) == 1
+                else "multiple"
+            )
+            print(
+                f"Filtered to {len(json_ds)} entries with matching audio "
+                f"(from {total_before} total)"
+            )
         
         # Split the dataset if needed
         matching_split = None
@@ -547,7 +594,7 @@ class HausaHFDataset(VoiceDataset):
         if matching_split is None:
             raise ValueError(f"No split config found for {self._args.split}")
         
-        # Apply 80/10/10 split if multiple batches
+        # Apply 80/10/10 split on filtered dataset
         if len(json_file_paths) > 1:
             split_seed = 42
             train_pct = 0.8
@@ -573,12 +620,19 @@ class HausaHFDataset(VoiceDataset):
                 self._json_dataset = val_test_split["train"]
             elif self._args.split == types.DatasetSplit.TEST:
                 self._json_dataset = val_test_split["test"]
+        else:
+            # Single JSON file - use the filtered dataset as-is
+            self._json_dataset = json_ds
         
-        # Calculate actual number of samples (will be adjusted during iteration as we filter)
+        # Calculate actual number of samples from filtered and split dataset
         try:
             actual_num_samples = len(self._json_dataset)
         except (TypeError, NotImplementedError, AttributeError):
-            actual_num_samples = matching_split.num_samples if matching_split.num_samples != -1 else 0
+            actual_num_samples = (
+                matching_split.num_samples
+                if matching_split.num_samples != -1
+                else 0
+            )
         
         dataset_name = f"{config.name}.{self._args.split.value}"
         super()._init_dataset(self._json_dataset, dataset_name, actual_num_samples)
@@ -589,6 +643,8 @@ class HausaHFDataset(VoiceDataset):
         
         Works with both parquet-backed and regular HF datasets. Parquet files are
         automatically handled by Hugging Face datasets library.
+        
+        If no batch configs are provided, loads directly from dataset root.
         """
         if self._hf_datasets_loaded:
             return
@@ -596,52 +652,88 @@ class HausaHFDataset(VoiceDataset):
         # Load Hugging Face datasets for audio
         # HF datasets can be stored as parquet files - load_dataset handles this automatically
         # We use streaming=False to build index, but parquet is efficient for this
-        for batch_idx, batch_config in enumerate(self._hf_batch_configs):
+        
+        if self._hf_batch_configs:
+            # Load with batch configs (subdirectories/batch structure)
+            for batch_idx, batch_config in enumerate(self._hf_batch_configs):
+                hf_ds = hf_datasets.load_dataset(
+                    self._hf_dataset_name,
+                    batch_config,
+                    trust_remote_code=True,
+                    streaming=False,  # Need non-streaming to build index efficiently
+                    download_config=hf_datasets.DownloadConfig(max_retries=10),
+                )
+                # Get the default split (usually "train")
+                split_name = list(hf_ds.keys())[0]
+                hf_ds_split = hf_ds[split_name]
+                
+                # Build mapping from audio filename to (batch_idx, hf_idx)
+                for hf_idx in range(len(hf_ds_split)):
+                    row = hf_ds_split[hf_idx]
+                    audio_path = self._extract_audio_path(row)
+                    
+                    # Extract just the filename
+                    if audio_path:
+                        audio_filename = os.path.basename(audio_path)
+                        if audio_filename:
+                            # Store first occurrence (don't cache row yet - load on demand)
+                            if audio_filename not in self._hf_audio_indices:
+                                self._hf_audio_indices[audio_filename] = (
+                                    batch_idx, hf_idx
+                                )
+        else:
+            # No batch structure - load directly from dataset root
             hf_ds = hf_datasets.load_dataset(
                 self._hf_dataset_name,
-                batch_config,
                 trust_remote_code=True,
                 streaming=False,  # Need non-streaming to build index efficiently
-                # Parquet files are automatically handled - no special config needed
                 download_config=hf_datasets.DownloadConfig(max_retries=10),
             )
             # Get the default split (usually "train")
             split_name = list(hf_ds.keys())[0]
             hf_ds_split = hf_ds[split_name]
             
-            # Build mapping from audio filename to (batch_idx, hf_idx)
-            # For parquet-backed datasets, this iterates efficiently through the parquet file
+            # Build mapping from audio filename to (None, hf_idx)
+            # batch_idx is None since there are no batches
             for hf_idx in range(len(hf_ds_split)):
                 row = hf_ds_split[hf_idx]
-                audio_path = None
-                
-                # Try to get audio path from various possible fields
-                # For parquet datasets with Audio feature, audio is typically in "audio" field
-                if "audio" in row:
-                    audio_obj = row["audio"]
-                    if isinstance(audio_obj, dict):
-                        # Audio feature stores path in dict: {"path": "...", "array": ..., "sampling_rate": ...}
-                        audio_path = audio_obj.get("path", "")
-                    elif isinstance(audio_obj, str):
-                        audio_path = audio_obj
-                elif "path" in row:
-                    audio_path = row["path"]
-                elif "file" in row:
-                    audio_path = row["file"]
-                elif "filename" in row:
-                    audio_path = row["filename"]
-                elif "audio_path" in row:
-                    audio_path = row["audio_path"]
+                audio_path = self._extract_audio_path(row)
                 
                 # Extract just the filename
                 if audio_path:
                     audio_filename = os.path.basename(audio_path)
                     if audio_filename:
-                        # Store first occurrence (don't cache row yet - load on demand)
+                        # Store first occurrence (batch_idx=None for root dataset)
                         if audio_filename not in self._hf_audio_indices:
-                            self._hf_audio_indices[audio_filename] = (batch_idx, hf_idx)
+                            self._hf_audio_indices[audio_filename] = (
+                                None, hf_idx
+                            )
         
         self._hf_datasets_loaded = True
+    
+    def _extract_audio_path(self, row) -> Optional[str]:
+        """Extract audio path from a dataset row."""
+        audio_path = None
+        
+        # Try to get audio path from various possible fields
+        # For parquet datasets with Audio feature, audio is typically in "audio" field
+        if "audio" in row:
+            audio_obj = row["audio"]
+            if isinstance(audio_obj, dict):
+                # Audio feature stores path in dict
+                audio_path = audio_obj.get("path", "")
+            elif isinstance(audio_obj, str):
+                audio_path = audio_obj
+        elif "path" in row:
+            audio_path = row["path"]
+        elif "file" in row:
+            audio_path = row["file"]
+        elif "filename" in row:
+            audio_path = row["filename"]
+        elif "audio_path" in row:
+            audio_path = row["audio_path"]
+        
+        return audio_path
     
     def _get_hf_audio_row(self, audio_filename: str):
         """Get HF audio row for a given audio filename, loading on-demand."""
@@ -658,15 +750,31 @@ class HausaHFDataset(VoiceDataset):
             if not hasattr(self, '_hf_dataset_cache'):
                 self._hf_dataset_cache = {}
             
-            cache_key = batch_idx
+            # Use batch_idx as cache key, or "root" if None
+            cache_key = batch_idx if batch_idx is not None else "root"
+            
             if cache_key not in self._hf_dataset_cache:
-                hf_ds = hf_datasets.load_dataset(
-                    self._hf_dataset_name,
-                    self._hf_batch_configs[batch_idx],
-                    trust_remote_code=True,
-                    streaming=False,
-                    download_config=hf_datasets.DownloadConfig(max_retries=10),
-                )
+                if batch_idx is not None:
+                    # Load with batch config
+                    hf_ds = hf_datasets.load_dataset(
+                        self._hf_dataset_name,
+                        self._hf_batch_configs[batch_idx],
+                        trust_remote_code=True,
+                        streaming=False,
+                        download_config=hf_datasets.DownloadConfig(
+                            max_retries=10
+                        ),
+                    )
+                else:
+                    # Load directly from dataset root (no batch config)
+                    hf_ds = hf_datasets.load_dataset(
+                        self._hf_dataset_name,
+                        trust_remote_code=True,
+                        streaming=False,
+                        download_config=hf_datasets.DownloadConfig(
+                            max_retries=10
+                        ),
+                    )
                 split_name = list(hf_ds.keys())[0]
                 self._hf_dataset_cache[cache_key] = hf_ds[split_name]
             
@@ -677,14 +785,141 @@ class HausaHFDataset(VoiceDataset):
         return None
     
     def _load_json_dataset(self, json_file_path: str):
-        """Load JSON file as Hugging Face dataset."""
-        return hf_datasets.load_dataset(
-            "json",
-            data_files=json_file_path,
-            split="train",
-            trust_remote_code=True,
-            streaming=False,
-            download_config=hf_datasets.DownloadConfig(max_retries=10),
+        """Load JSON file from HuggingFace dataset.
+        
+        json_file_path should start with "hf://" followed by the JSON filename.
+        The method will attempt to load the JSON file from the HF dataset.
+        """
+        # Extract filename from marker
+        # e.g., "hf://conversation_pairs_completed_batch_0.json"
+        if not json_file_path.startswith("hf://"):
+            raise ValueError(
+                f"Expected JSON path to start with 'hf://', got: {json_file_path}"
+            )
+        json_filename = json_file_path[5:]  # Remove "hf://" prefix
+
+        # Try to match batch config based on filename (if batch configs exist)
+        # e.g., "conversation_pairs_completed_batch_0.json" -> "hausa-batch-0"
+        batch_idx = None
+        if self._hf_batch_configs:
+            for idx, batch_config in enumerate(self._hf_batch_configs):
+                # Extract batch number from config name
+                # e.g., "hausa-batch-0" -> "0"
+                batch_num = batch_config.split("-")[-1]
+                # Check if JSON filename contains this batch number
+                batch_patterns = [
+                    f"batch_{batch_num}",
+                    f"batch-{batch_num}"
+                ]
+                if any(pattern in json_filename for pattern in batch_patterns):
+                    batch_idx = idx
+                    break
+
+        # Load JSON from HuggingFace dataset
+        # First try loading as data file from matching batch config
+        if batch_idx is not None and self._hf_batch_configs:
+            try:
+                ds = hf_datasets.load_dataset(
+                    self._hf_dataset_name,
+                    self._hf_batch_configs[batch_idx],
+                    data_files=json_filename,
+                    split="train",
+                    trust_remote_code=True,
+                    streaming=False,
+                    download_config=hf_datasets.DownloadConfig(
+                        max_retries=10
+                    ),
+                )
+                return ds
+            except Exception:
+                pass  # Fall through to try other methods
+
+        # Try loading as data file from dataset root (without config)
+        try:
+            ds = hf_datasets.load_dataset(
+                self._hf_dataset_name,
+                data_files=json_filename,
+                split="train",
+                trust_remote_code=True,
+                streaming=False,
+                download_config=hf_datasets.DownloadConfig(max_retries=10),
+            )
+            return ds
+        except Exception:
+            pass
+
+        # If JSON file not found, try loading the dataset config directly
+        # The JSON data might be embedded in the dataset itself
+        if batch_idx is not None and self._hf_batch_configs:
+            try:
+                ds = hf_datasets.load_dataset(
+                    self._hf_dataset_name,
+                    self._hf_batch_configs[batch_idx],
+                    split="train",
+                    trust_remote_code=True,
+                    streaming=False,
+                    download_config=hf_datasets.DownloadConfig(
+                        max_retries=10
+                    ),
+                )
+                # If dataset has transcript/response fields, use directly
+                if ("transcript" in ds.column_names and
+                        "response" in ds.column_names):
+                    return ds
+            except Exception:
+                pass
+        elif not self._hf_batch_configs:
+            # No batch configs - try loading from dataset root
+            try:
+                ds = hf_datasets.load_dataset(
+                    self._hf_dataset_name,
+                    split="train",
+                    trust_remote_code=True,
+                    streaming=False,
+                    download_config=hf_datasets.DownloadConfig(
+                        max_retries=10
+                    ),
+                )
+                # If dataset has transcript/response fields, use directly
+                if ("transcript" in ds.column_names and
+                        "response" in ds.column_names):
+                    return ds
+            except Exception:
+                pass
+
+        # If all HF attempts failed, try loading from local fallback
+        if json_filename in self._local_json_paths:
+            local_path = self._local_json_paths[json_filename]
+            if os.path.exists(local_path):
+                print(
+                    f"⚠️  JSON file '{json_filename}' not found in HuggingFace. "
+                    f"Falling back to local file: {local_path}"
+                )
+                try:
+                    ds = hf_datasets.load_dataset(
+                        "json",
+                        data_files=local_path,
+                        split="train",
+                        trust_remote_code=True,
+                        streaming=False,
+                        download_config=hf_datasets.DownloadConfig(
+                            max_retries=10
+                        ),
+                    )
+                    return ds
+                except Exception as e:
+                    print(
+                        f"ERROR: Could not load local JSON file "
+                        f"'{local_path}': {e}"
+                    )
+        
+        raise ValueError(
+            f"Could not load JSON file '{json_filename}' from "
+            f"HuggingFace dataset '{self._hf_dataset_name}' or local fallback. "
+            f"Make sure the JSON file exists in the dataset as a data file, "
+            f"the dataset contains 'transcript' and 'response' columns, "
+            f"or the local file exists at: "
+            f"{self._local_json_paths.get(json_filename, 'N/A')}"
         )
     
     def _get_audio(
@@ -730,7 +965,10 @@ class HausaHFDataset(VoiceDataset):
                 # Direct path string
                 return data_sample.audio_from_file(audio_obj)
         
-        raise ValueError(f"Could not extract audio from HF dataset row for {audio_filename}. Available keys: {list(hf_row.keys())}")
+        raise ValueError(
+            f"Could not extract audio from HF dataset row for "
+            f"{audio_filename}. Available keys: {list(hf_row.keys())}"
+        )
     
     def __iter__(self):
         """Override iteration to filter samples with missing audio during training."""
@@ -752,17 +990,20 @@ class HausaHFDataset(VoiceDataset):
         for row in dataset_iter:
             actual_length += 1
             
-            # Check if audio exists in HF dataset before processing
+            # Note: Audio existence check is already done during initialization
+            # The dataset has been filtered to only include entries with
+            # matching audio. This check is kept as a safety measure.
             if self._args.include_audio:
                 audio_field = self._config.audio_field or "audio_path"
                 audio_path = row.get(audio_field, "")
                 audio_filename = os.path.basename(audio_path) if audio_path else ""
                 
                 if audio_filename:
-                    # Lazy load HF datasets if needed
+                    # Ensure HF datasets are loaded (should already be loaded)
                     self._load_hf_datasets_if_needed()
                     
-                    # Check if audio exists in HF dataset
+                    # Double-check audio exists (should always pass after
+                    # filtering)
                     if audio_filename not in self._hf_audio_indices:
                         missing_audio_samples += 1
                         continue  # Skip this sample - audio not found in HF dataset
