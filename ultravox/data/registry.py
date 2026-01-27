@@ -23,6 +23,7 @@ from ultravox.data.configs import shrutilipi
 from ultravox.data.configs import voicebench
 from ultravox.data.configs import voxpopuli
 from ultravox.data.configs import wenetspeech
+from ultravox.data.configs import hausa
 
 DATASET_MAP: Dict[str, types.DatasetConfig] = {}
 
@@ -88,7 +89,33 @@ def create_dataset(
 
     if verbose:
         logging.info(f"Creating dataset {name} with config:\n{merged_config}")
-    dataset = datasets.GenericDataset(args, merged_config)
+    
+    # Check if this is a local JSON file dataset (by checking if path contains .json)
+    import os
+    if merged_config.path and '.json' in merged_config.path:
+        # Check if this is the Hausa dataset - use Hugging Face for audio
+        if name.startswith('hausa'):
+            # Import Hausa config to get HF dataset info
+            from ultravox.data.configs import hausa
+            dataset = datasets.HausaHFDataset(
+                args,
+                merged_config,
+                merged_config.path,
+                hausa.HAUSA_HF_DATASET_NAME,
+                hausa.HAUSA_HF_BATCH_CONFIGS
+            )
+        else:
+            # For other datasets, use LocalJsonDataset with local files
+            if ',' in merged_config.path:
+                first_path = merged_config.path.split(',')[0].strip()
+                json_dir = os.path.dirname(first_path) if os.path.exists(first_path) else None
+            else:
+                json_dir = os.path.dirname(merged_config.path) if os.path.exists(merged_config.path) else None
+            
+            audio_base_dir = json_dir
+            dataset = datasets.LocalJsonDataset(args, merged_config, merged_config.path, audio_base_dir)
+    else:
+        dataset = datasets.GenericDataset(args, merged_config)
     return dataset
 
 
@@ -111,3 +138,4 @@ register_datasets(shrutilipi.configs)
 register_datasets(kathbath.configs)
 register_datasets(indicvoices.configs)
 register_datasets(voicebench.configs)
+register_datasets(hausa.configs)

@@ -1,0 +1,16 @@
+# Evaluation config for Hausa conversation dataset
+model: "outputs/hausa_stage1_projector/checkpoint-1000"  # Update with your trained checkpoint path
+
+report_logs_to: ["wandb"]
+output_dir: "./output/hausa_eval"
+
+eval_sets:
+  - name: hausa-test   # Test split (10% of data)
+
+eval_dataset_args:
+  max_samples: -1  # Evaluate on all test samples, or set a limit like 1000
+
+eval_batch_size: 8
+eval_max_tokens: 512
+eval_temperature: 0.0  # Deterministic generation
+

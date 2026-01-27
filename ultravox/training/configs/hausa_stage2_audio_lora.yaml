@@ -1,0 +1,39 @@
+# Stage 2: Fine-tune Whisper audio model using LoRA
+# Load checkpoint from Stage 1, then add LoRA to audio model
+
+text_model: "zai-org/GLM-4.6"
+audio_model: "openai/whisper-large-v3-turbo"
+
+# Load checkpoint from Stage 1 (update path after Stage 1 completes)
+model_load_dir: "outputs/hausa_stage1_projector/checkpoint-<num_steps>"  # Update with actual checkpoint path
+
+# Enable LoRA for audio model (Whisper)
+audio_model_lora_config:
+  r: 8                    # LoRA rank (higher = more parameters, more capacity)
+  lora_alpha: 16         # LoRA alpha (scaling factor, typically 2x rank)
+  target_modules:        # Which modules to apply LoRA to
+    - "k_proj"
+    - "q_proj"
+    - "v_proj"
+    - "out_proj"
+
+# Projector and LLM remain frozen
+# text_model_lora_config: null  # LLM stays frozen
+
+train_sets:
+  - name: hausa-train
+val_sets:
+  - name: hausa-val
+
+batch_size: 8            # Slightly smaller due to LoRA overhead
+max_steps: 500
+lr: 5e-5                 # Lower learning rate for fine-tuning
+lr_warmup_steps: 50
+save_steps: 100
+logging_steps: 50
+
+# Validation configuration
+val_steps: 1.0  # Validate every epoch (when using num_epochs) or set to steps_per_epoch
+val_batch_size: 6
+do_eval: true  # Enable evaluation on val_sets during training
+

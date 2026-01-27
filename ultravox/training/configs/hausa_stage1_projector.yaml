@@ -1,0 +1,29 @@
+# Stage 1: Train only the adapter/projector
+# Audio tower and LLM are frozen by default
+
+text_model: "zai-org/GLM-4.6"
+audio_model: "openai/whisper-large-v3-turbo"
+
+# Load pre-trained Ultravox checkpoint
+model_load_dir: "fixie-ai/ultravox-v0_7-glm-4_6"
+
+# Only projector will be trained (default behavior)
+# No LoRA configs = audio_tower and language_model are frozen
+
+train_sets:
+  - name: hausa-train
+val_sets:
+  - name: hausa-val
+
+batch_size: 10
+max_steps: 1000
+lr: 1e-4
+lr_warmup_steps: 100
+save_steps: 200
+logging_steps: 50
+
+# Validation configuration
+val_steps: 1.0  # Validate every epoch (when using num_epochs) or set to steps_per_epoch for step-based
+val_batch_size: 8
+do_eval: true  # Enable evaluation on val_sets during training
+
