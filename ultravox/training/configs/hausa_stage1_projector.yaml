@@ -15,15 +15,26 @@ train_sets:
 val_sets:
   - name: hausa-val
 
+# Training configuration - Epoch-based training
+num_epochs: 100  # Train for 100 epochs
+max_steps: -1 # -1 means use num_epochs instead of max_steps
 batch_size: 10
-max_steps: 1000
-lr: 1e-4
-lr_warmup_steps: 100
-save_steps: 200
-logging_steps: 50
+grad_accum_steps: 2
+lr: 5e-4
+lr_warmup_steps: 1000
+
+# Data loading configuration
+num_workers: 8  # Parallel data loading workers (default: 8 if CUDA available, 1 otherwise)
+
+# Logging and saving configuration
+# With 2000 samples and batch_size=10: steps_per_epoch = 2000/10 = 200 steps
+logging_steps: 0.1  # Log metrics every 100 steps (twice per epoch)
+save_steps: 0.1  # Save checkpoint every epoch (200 steps = 1 epoch)
 
 # Validation configuration
-val_steps: 1.0  # Validate every epoch (when using num_epochs) or set to steps_per_epoch for step-based
+val_steps: 0.5  # Validate once per epoch (200 steps = 1 epoch with your dataset)
 val_batch_size: 8
 do_eval: true  # Enable evaluation on val_sets during training
 
+# FSDP configuration
+use_fsdp: false

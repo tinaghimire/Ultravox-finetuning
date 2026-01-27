@@ -584,6 +584,15 @@ class HausaHFDataset(VoiceDataset):
                 f"(from {total_before} total)"
             )
         
+        # Apply max_samples limit AFTER loading all data and filtering
+        # This ensures we load everything first, then limit to max_samples
+        if self._args.max_samples > 0 and len(json_ds) > self._args.max_samples:
+            print(
+                f"Limiting dataset to {self._args.max_samples} samples "
+                f"(from {len(json_ds)} total after filtering)"
+            )
+            json_ds = json_ds.select(range(self._args.max_samples))
+        
         # Split the dataset if needed
         matching_split = None
         for split in config.splits:
@@ -594,35 +603,67 @@ class HausaHFDataset(VoiceDataset):
         if matching_split is None:
             raise ValueError(f"No split config found for {self._args.split}")
         
-        # Apply 80/10/10 split on filtered dataset
-        if len(json_file_paths) > 1:
-            split_seed = 42
-            train_pct = 0.8
-            
-            if self._args.shuffle:
-                json_ds = json_ds.shuffle(seed=split_seed)
-            
-            train_val_test = json_ds.train_test_split(
-                train_size=train_pct,
-                seed=split_seed,
-                shuffle=False
-            )
-            
-            val_test_split = train_val_test["test"].train_test_split(
-                train_size=0.5,
-                seed=split_seed,
-                shuffle=False
-            )
-            
-            if self._args.split == types.DatasetSplit.TRAIN:
-                self._json_dataset = train_val_test["train"]
-            elif self._args.split == types.DatasetSplit.VALIDATION:
-                self._json_dataset = val_test_split["train"]
-            elif self._args.split == types.DatasetSplit.TEST:
-                self._json_dataset = val_test_split["test"]
-        else:
-            # Single JSON file - use the filtered dataset as-is
-            self._json_dataset = json_ds
+        # Apply 90/5/5 split on filtered dataset (loads completely first)
+        # Dataset is fully loaded before splitting - always split regardless of number of JSON files
+        split_seed = 42
+        
+        if self._args.shuffle:
+            json_ds = json_ds.shuffle(seed=split_seed)
+        
+        # First split: train (90%) vs (val+test) (10%)
+        train_pct = 0.9
+        train_val_test = json_ds.train_test_split(
+            train_size=train_pct,
+            seed=split_seed,
+            shuffle=False
+        )
+        
+        # Second split: val (5%) vs test (5%) from the remaining 10%
+        # Split the remaining 10% equally: 50% val, 50% test
+        val_test_split = train_val_test["test"].train_test_split(
+            train_size=0.5,
+            seed=split_seed,
+            shuffle=False
+        )
+        
+        if self._args.split == types.DatasetSplit.TRAIN:
+            train_dataset = train_val_test["train"]
+            # Limit train to num_samples if specified (e.g., 2000)
+            if matching_split.num_samples > 0 and len(train_dataset) > matching_split.num_samples:
+                train_dataset = train_dataset.select(range(matching_split.num_samples))
+            self._json_dataset = train_dataset
+        elif self._args.split == types.DatasetSplit.VALIDATION:
+            self._json_dataset = val_test_split["train"]
+        elif self._args.split == types.DatasetSplit.TEST:
+            self._json_dataset = val_test_split["test"]
+        
+        # Calculate actual number of samples from filtered and split dataset
+        try:
+            actual_num_samples = len(self._json_dataset)
+        except (TypeError, NotImplementedError, AttributeError):
+            # Fallback: calculate from total dataset using 90/5/5 proportions
+            try:
+                total_len = len(json_ds)
+                if self._args.split == types.DatasetSplit.TRAIN:
+                    # Use specified num_samples if set, otherwise 90% of total
+                    if matching_split.num_samples > 0:
+                        actual_num_samples = min(matching_split.num_samples, int(total_len * 0.9))
+                    else:
+                        actual_num_samples = int(total_len * 0.9)
+                elif self._args.split == types.DatasetSplit.VALIDATION:
+                    actual_num_samples = int(total_len * 0.05)
+                else:  # TEST
+                    # Test gets the remainder to account for rounding
+                    actual_num_samples = total_len - int(total_len * 0.9) - int(total_len * 0.05)
+            except (TypeError, NotImplementedError, AttributeError):
+                actual_num_samples = (
+                    matching_split.num_samples
+                    if matching_split.num_samples != -1
+                    else 0
+                )
+        
+        dataset_name = f"{config.name}.{self._args.split.value}"
+        super()._init_dataset(self._json_dataset, dataset_name, actual_num_samples)
         
         # Calculate actual number of samples from filtered and split dataset
         try:
@@ -1215,9 +1256,7 @@ class LocalJsonDataset(VoiceDataset):
             split_seed = 42
             
             # 80/10/10 split proportions
-            train_pct = 0.8
-            val_pct = 0.1
-            test_pct = 0.1
+            train_pct = 0.9
             
             # Shuffle the combined dataset first (if not already shuffled)
             if self._args.shuffle:
@@ -1233,7 +1272,7 @@ class LocalJsonDataset(VoiceDataset):
             # Second split: val (10%) vs test (10%) from the remaining 20%
             # val should be 50% of the remaining (10% of total)
             val_test_split = train_val_test["test"].train_test_split(
-                train_size=0.5,  # 50% of 20% = 10% of total
+                train_size=0.5,  # 50% of 10% = 5% of total
                 seed=split_seed,
                 shuffle=False
             )
@@ -1244,7 +1283,7 @@ class LocalJsonDataset(VoiceDataset):
             elif self._args.split == types.DatasetSplit.VALIDATION:
                 dataset = val_test_split["train"]
             elif self._args.split == types.DatasetSplit.TEST:
-                dataset = val_test_split["test"]
+                dataset = val_test_split["train"]
             else:
                 # Fallback: use combined dataset
                 dataset = combined_ds

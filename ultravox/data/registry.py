@@ -97,6 +97,12 @@ def create_dataset(
         if name.startswith('hausa'):
             # Import Hausa config to get HF dataset info
             from ultravox.data.configs import hausa
+            # Use HAUSA_MAX_DATASET_SIZE from config if args.max_samples is default (-1)
+            if args.max_samples == -1 and hausa.HAUSA_MAX_DATASET_SIZE > 0:
+                # Create a copy of args with max_samples overridden
+                args = dataclasses.replace(
+                    args, max_samples=hausa.HAUSA_MAX_DATASET_SIZE
+                )
             dataset = datasets.HausaHFDataset(
                 args,
                 merged_config,
