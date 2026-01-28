@@ -241,6 +241,7 @@ def eval_datasets(
                 dataset_config = dataset.get_config()
                 aug_name = "null"
                 if dataset_config.eval_config:
+                    # Compute primary metric
                     eval_result: eval_types.Result = eval_metrics.evaluate_answers(
                         results, dataset_config.eval_config
                     )
@@ -264,6 +265,31 @@ def eval_datasets(
                             eval_result.score,
                         )
                     )
+
+                    # Compute additional metrics if specified
+                    if dataset_config.eval_config.additional_metrics:
+                        for additional_metric in dataset_config.eval_config.additional_metrics:
+                            metric_name = additional_metric.get("metric")
+                            metric_args = additional_metric.get("args", {})
+                            if metric_name:
+                                # Create a temporary EvalConfig for the additional metric
+                                additional_config = types.EvalConfig(
+                                    metric=metric_name,
+                                    args=metric_args,
+                                )
+                                additional_result = eval_metrics.evaluate_answers(
+                                    results, additional_config
+                                )
+                                logging.info(
+                                    f"Eval: {dataset.name}, {aug_name}, {metric_name}: {additional_result.score:.2f}"
+                                )
+                                metrics.append(
+                                    (
+                                        f"{dataset.name}.{metric_name}",
+                                        f"{aug_name}",
+                                        additional_result.score,
+                                    )
+                                )
 
                     if wandb.run:
                         wandb.run.log(

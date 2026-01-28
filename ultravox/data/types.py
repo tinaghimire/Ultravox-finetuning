@@ -146,6 +146,10 @@ class EvalConfig(helpers.Serializable):
     extra_kwargs_map: Dict[str, str] = dataclasses.field(default_factory=dict)
     """Mapping of field names to use as extra_kwargs for the sample.
     key is name in extra_kwargs, value is name in dataset row."""
+    additional_metrics: Optional[List[Dict[str, Any]]] = None
+    """Additional metrics to compute alongside the primary metric.
+    Each dict should have 'metric' (str) and 'args' (dict) keys.
+    Example: [{'metric': 'bleu', 'args': {'tokenize': 'none'}}]"""
 
 
 @dataclasses.dataclass

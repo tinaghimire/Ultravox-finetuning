@@ -4,37 +4,55 @@
 text_model: "zai-org/GLM-4.6"
 audio_model: "openai/whisper-large-v3-turbo"
 
-# Load pre-trained Ultravox checkpoint
-model_load_dir: "fixie-ai/ultravox-v0_7-glm-4_6"
-
 # Only projector will be trained (default behavior)
 # No LoRA configs = audio_tower and language_model are frozen
 
+# Dataset configuration
+# Use HuggingFace datasets (from vaghawan/hausa-audio-resampled)
 train_sets:
-  - name: hausa-train
+  - name: hausa-huggingface-train
 val_sets:
-  - name: hausa-val
+  - name: hausa-huggingface-val
+test_sets:
+  - name: hausa-huggingface-test
+
+# Alternative: Use offline datasets (local files)
+# train_sets:
+#   - name: hausa-offline-train
+# val_sets:
+#   - name: hausa-offline-val
+# test_sets:
+#   - name: hausa-offline-test
 
 # Training configuration - Epoch-based training
 num_epochs: 100  # Train for 100 epochs
-max_steps: -1 # -1 means use num_epochs instead of max_steps
-batch_size: 10
-grad_accum_steps: 2
+max_steps: 0  # 0 means use num_epochs; > 0 overrides num_epochs
+batch_size: 32  # Increased from 10 to 32 for better GPU utilization
+grad_accum_steps: 2  # Effective batch size = 32 * 2 = 64
 lr: 5e-4
 lr_warmup_steps: 1000
 
 # Data loading configuration
-num_workers: 8  # Parallel data loading workers (default: 8 if CUDA available, 1 otherwise)
+num_workers: 8  # Parallel data loading workers
 
 # Logging and saving configuration
-# With 2000 samples and batch_size=10: steps_per_epoch = 2000/10 = 200 steps
-logging_steps: 0.1  # Log metrics every 100 steps (twice per epoch)
-save_steps: 0.1  # Save checkpoint every epoch (200 steps = 1 epoch)
+# Note: logging_steps, save_steps, val_steps can be:
+#   - Integer: exact number of steps
+#   - Float (0-1): fraction of steps per epoch
+# Example: If steps_per_epoch=100, logging_steps=0.1 means every 10 steps
+logging_steps: 50  # Log metrics every 50 steps (integer = exact steps)
+save_steps: 500  # Save checkpoint every 500 steps (integer = exact steps)
 
 # Validation configuration
-val_steps: 0.5  # Validate once per epoch (200 steps = 1 epoch with your dataset)
-val_batch_size: 8
+val_steps: 200  # Validate every 200 steps (integer = exact steps)
+val_batch_size: 32  # Match training batch size
 do_eval: true  # Enable evaluation on val_sets during training
 
 # FSDP configuration
-use_fsdp: false
+# FSDP (Fully Sharded Data Parallel) is better for training because:
+# 1. Memory efficiency: Shards model parameters across GPUs, reducing memory per GPU
+# 2. Scalability: Can train larger models with limited GPU memory
+# 3. Performance: Better GPU utilization for large models
+# 4. Gradient synchronization: Efficient gradient communication across GPUs
+# Enable if training on multiple GPUs with large models
+use_fsdp: true  # Set to true for multi-GPU training with large models

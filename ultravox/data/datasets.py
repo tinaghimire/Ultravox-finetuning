@@ -3,7 +3,6 @@ import logging
 import os
 import tempfile
 import warnings
-from collections import defaultdict
 from typing import Any, Dict, List, Optional, Sequence
 
 import datasets as hf_datasets
@@ -472,6 +471,441 @@ class GenericDataset(VoiceDataset):
         return self._config
 
 
+class HausaHFDatasetDirect(VoiceDataset):
+    """
+    Dataset class for Hausa HuggingFace dataset that loads directly from HF.
+    Dataset structure: vaghawan/hausa-audio-resampled
+    - Subsets: hausa-batch-0, hausa-batch-1, hausa-batch-2
+    - Splits: train, validation, test
+    - Fields: audio (.wav), transcript, completion, speaker_id, language
+    """
+    
+    def __init__(
+        self,
+        args: types.VoiceDatasetArgs,
+        config: types.DatasetConfig,
+        hf_dataset_name: str,
+        hf_batch_configs: List[str],
+    ) -> None:
+        super().__init__(args)
+        self._config = config
+        self._hf_dataset_name = hf_dataset_name
+        self._hf_batch_configs = hf_batch_configs
+        
+        # Find matching split config
+        matching_split = None
+        for split in config.splits:
+            if split.split == self._args.split:
+                matching_split = split
+                break
+        
+        if matching_split is None:
+            raise ValueError(f"No split config found for {self._args.split}")
+        
+        split_name = matching_split.name  # "train", "validation", or "test"
+        
+        # Load complete dataset from all batches with the same split and concatenate
+        # This combines all train splits from all batches into one unified train dataset
+        # Same for validation and test splits
+        datasets_list = []
+        print(
+            f"Loading complete {split_name} split from all batches: "
+            f"{self._hf_batch_configs}"
+        )
+        
+        for batch_idx, batch_config in enumerate(self._hf_batch_configs):
+            print(
+                f"Loading {split_name} from batch "
+                f"{batch_idx+1}/{len(self._hf_batch_configs)}: {batch_config}"
+            )
+            try:
+                # Load complete dataset (non-streaming) for this batch and split
+                all_splits = hf_datasets.load_dataset(
+                    self._hf_dataset_name,
+                    batch_config,
+                    trust_remote_code=True,
+                    streaming=False,  # Load complete dataset
+                    download_config=hf_datasets.DownloadConfig(max_retries=10),
+                )
+                
+                # Get the requested split
+                if split_name in all_splits:
+                    ds = all_splits[split_name]
+                else:
+                    # Try alternative split names
+                    split_alternatives = {
+                        "train": ["train", "training"],
+                        "validation": ["validation", "val", "dev"],
+                        "test": ["test", "testing"]
+                    }
+                    found = False
+                    for alt_name in split_alternatives.get(split_name, [split_name]):
+                        if alt_name in all_splits:
+                            ds = all_splits[alt_name]
+                            print(f"  Using '{alt_name}' as {split_name}")
+                            found = True
+                            break
+                    if not found:
+                        raise ValueError(
+                            f"Split '{split_name}' not found in {batch_config}. "
+                            f"Available splits: {list(all_splits.keys())}"
+                        )
+                
+                # Cast audio field if needed
+                if config.audio_field:
+                    ds = ds.cast_column(
+                        config.audio_field,
+                        hf_datasets.Audio(
+                            sampling_rate=data_sample.SAMPLE_RATE
+                        )
+                    )
+                
+                print(
+                    f"  ✓ Loaded {len(ds)} samples from "
+                    f"{batch_config}/{split_name}"
+                )
+                datasets_list.append(ds)
+                
+            except Exception as e:
+                print(
+                    f"  ❌ Error loading {split_name} from "
+                    f"{batch_config}: {e}"
+                )
+                raise
+        
+        if len(datasets_list) == 0:
+            raise ValueError(
+                f"Could not load {split_name} split from any batch. "
+                f"Tried batches: {self._hf_batch_configs}"
+            )
+        
+        # Concatenate all batch datasets into one unified split
+        if len(datasets_list) > 1:
+            print(
+                f"Concatenating {len(datasets_list)} batches into one "
+                f"unified {split_name} dataset..."
+            )
+            combined_ds = hf_datasets.concatenate_datasets(datasets_list)
+            print(
+                f"✓ Combined {split_name} dataset: {len(combined_ds)} total "
+                f"samples from all batches"
+            )
+        else:
+            combined_ds = datasets_list[0]
+            print(
+                f"✓ Using {split_name} dataset: {len(combined_ds)} samples"
+            )
+        
+        initial_size = len(combined_ds)
+        
+        # Apply max_samples limit
+        if self._args.max_samples > 0 and len(combined_ds) > self._args.max_samples:
+            print(
+                f"Limiting dataset to {self._args.max_samples} samples "
+                f"(from {len(combined_ds)} total)"
+            )
+            combined_ds = combined_ds.select(range(self._args.max_samples))
+        
+        # Apply split-specific num_samples if specified
+        if matching_split.num_samples > 0 and len(combined_ds) > matching_split.num_samples:
+            print(
+                f"Limiting {split_name} to {matching_split.num_samples} samples "
+                f"(from {len(combined_ds)} total)"
+            )
+            combined_ds = combined_ds.select(range(matching_split.num_samples))
+        
+        # Calculate actual number of samples
+        try:
+            actual_num_samples = len(combined_ds)
+        except (TypeError, NotImplementedError, AttributeError):
+            actual_num_samples = (
+                matching_split.num_samples
+                if matching_split.num_samples != -1
+                else 0
+            )
+        
+        # Print final dataset size summary
+        print("\n" + "=" * 70)
+        print(f"DATASET SUMMARY - {split_name.upper()} SPLIT")
+        print("=" * 70)
+        print(f"  Initial size (from all batches): {initial_size:,} samples")
+        if initial_size != actual_num_samples:
+            print(f"  Final size (after limits):      {actual_num_samples:,} samples")
+        else:
+            print(f"  Final size:                     {actual_num_samples:,} samples")
+        print("=" * 70 + "\n")
+        
+        dataset_name = f"{config.name}.{self._args.split.value}"
+        super()._init_dataset(combined_ds, dataset_name, actual_num_samples)
+    
+    def _get_sample(self, row) -> Optional[data_sample.VoiceSample]:
+        """Convert row to VoiceSample using templates."""
+        message_history = None
+        
+        try:
+            user_content = jinja2.Template(
+                self._config.user_template,  # type: ignore[arg-type]
+                undefined=jinja2.StrictUndefined,
+            ).render(
+                **row,
+                text_proc=text_proc,
+                **self._config.user_template_args,  # type: ignore[arg-type]
+            )
+            assistant_content = jinja2.Template(
+                self._config.assistant_template,  # type: ignore[arg-type]
+                undefined=jinja2.StrictUndefined,
+            ).render(**row, text_proc=text_proc)
+            transcript_rendered = jinja2.Template(
+                self._config.transcript_template,  # type: ignore[arg-type]
+                undefined=jinja2.StrictUndefined,
+            ).render(**row, text_proc=text_proc)
+            
+            system_prompt = (
+                jinja2.Template(
+                    self._config.system_prompt_template,  # type: ignore[arg-type]
+                    undefined=jinja2.StrictUndefined,
+                ).render(**row, text_proc=text_proc)
+                if self._config.system_prompt_template is not None
+                and not self._args.ignore_system_prompt
+                else None
+            )
+        except jinja2.TemplateError as e:
+            print(f"Error rendering template: {e}")
+            print(f"sample keys: {list(row.keys())}")
+            raise ValueError(
+                "Template rendering failed. Make sure all keys exist."
+            ) from e
+        
+        if not self._args.include_audio:
+            user_content = user_content.replace(
+                types.AUDIO_PLACEHOLDER, f'"{transcript_rendered}"'
+            )
+        
+        messages = _get_messages(
+            user_content,
+            assistant_content,
+            message_history=message_history,
+            sys_prompt=system_prompt,
+        )
+        
+        audio: Optional[np.ndarray] = (
+            self._get_audio(row, self._config.audio_field)
+            if self._args.include_audio
+            else None
+        )
+        
+        return self._make_sample(
+            messages,
+            audio,
+            audio_transcript=transcript_rendered,
+        )
+    
+    def __str__(self):
+        return f"HausaHFDatasetDirect({self._config.name})"
+    
+    def get_config(self):
+        return self._config
+
+
+class HausaOfflineDataset(VoiceDataset):
+    """
+    Dataset class for Hausa offline dataset that loads from local files.
+    - JSON files: train.json, validation.json, test.json in dataset folder
+    - Audio files: in dataset/audio folder
+    - Fields: transcript, completion, audio_path, speaker_id, language
+    """
+    
+    def __init__(
+        self,
+        args: types.VoiceDatasetArgs,
+        config: types.DatasetConfig,
+        dataset_dir: str,
+        audio_dir: str,
+    ) -> None:
+        super().__init__(args)
+        self._config = config
+        self._dataset_dir = dataset_dir
+        self._audio_dir = audio_dir
+        
+        # Find matching split config
+        matching_split = None
+        for split in config.splits:
+            if split.split == self._args.split:
+                matching_split = split
+                break
+        
+        if matching_split is None:
+            raise ValueError(f"No split config found for {self._args.split}")
+        
+        # Determine JSON file name based on split
+        split_to_file = {
+            types.DatasetSplit.TRAIN: "train.json",
+            types.DatasetSplit.VALIDATION: "validation.json",
+            types.DatasetSplit.TEST: "test.json",
+        }
+        json_file = split_to_file.get(self._args.split, "train.json")
+        json_path = os.path.join(self._dataset_dir, json_file)
+        
+        # Load JSON dataset
+        ds = self._load_hf_dataset(
+            json_path,
+            split="train",
+            streaming=False,
+        )
+        
+        # Apply max_samples limit
+        if self._args.max_samples > 0 and len(ds) > self._args.max_samples:
+            print(
+                f"Limiting dataset to {self._args.max_samples} samples "
+                f"(from {len(ds)} total)"
+            )
+            ds = ds.select(range(self._args.max_samples))
+        
+        # Apply split-specific num_samples if specified
+        if matching_split.num_samples > 0 and len(ds) > matching_split.num_samples:
+            ds = ds.select(range(matching_split.num_samples))
+        
+        # Calculate actual number of samples
+        try:
+            actual_num_samples = len(ds)
+        except (TypeError, NotImplementedError, AttributeError):
+            actual_num_samples = (
+                matching_split.num_samples
+                if matching_split.num_samples != -1
+                else 0
+            )
+        
+        dataset_name = f"{config.name}.{self._args.split.value}"
+        super()._init_dataset(ds, dataset_name, actual_num_samples)
+    
+    def _load_hf_dataset(
+        self,
+        json_file_path: str,
+        split: Optional[str] = None,
+        streaming: bool = False,
+    ) -> data.Dataset:
+        """Load JSON file using Hugging Face datasets."""
+        dataset = hf_datasets.load_dataset(
+            "json",
+            data_files=json_file_path,
+            split=split if split else "train",
+            trust_remote_code=True,
+            streaming=streaming,
+            download_config=hf_datasets.DownloadConfig(max_retries=10),
+        )
+        
+        if self._args.shuffle:
+            if streaming:
+                dataset = dataset.shuffle(
+                    seed=self._args.shuffle_seed,
+                    buffer_size=self._args.shuffle_buffer_size,
+                )
+            else:
+                dataset = dataset.shuffle(seed=self._args.shuffle_seed)
+        return dataset
+    
+    def _get_audio(
+        self, row: transformers.BatchFeature, column_name: Optional[str] = None
+    ) -> np.ndarray:
+        """Load audio from local file path."""
+        audio_field = self._config.audio_field or "audio_path"
+        
+        # Get audio path from row
+        if audio_field not in row:
+            if "audio_path" in row:
+                audio_path = row["audio_path"]
+            else:
+                raise ValueError(
+                    f"No audio field found. Available keys: {list(row.keys())}"
+                )
+        else:
+            audio_path = row[audio_field]
+        
+        # Handle relative paths
+        if not os.path.isabs(audio_path):
+            # If just filename, look in audio_dir
+            if os.path.dirname(audio_path) == "":
+                audio_path = os.path.join(self._audio_dir, audio_path)
+            else:
+                # Relative path, join with audio_dir
+                audio_path = os.path.join(self._audio_dir, audio_path)
+        
+        # Load audio file
+        if not os.path.exists(audio_path):
+            raise FileNotFoundError(f"Audio file not found: {audio_path}")
+        
+        audio = data_sample.audio_from_file(audio_path)
+        return audio
+    
+    def _get_sample(self, row) -> Optional[data_sample.VoiceSample]:
+        """Convert row to VoiceSample using templates."""
+        message_history = None
+        
+        try:
+            user_content = jinja2.Template(
+                self._config.user_template,  # type: ignore[arg-type]
+                undefined=jinja2.StrictUndefined,
+            ).render(
+                **row,
+                text_proc=text_proc,
+                **self._config.user_template_args,  # type: ignore[arg-type]
+            )
+            assistant_content = jinja2.Template(
+                self._config.assistant_template,  # type: ignore[arg-type]
+                undefined=jinja2.StrictUndefined,
+            ).render(**row, text_proc=text_proc)
+            transcript_rendered = jinja2.Template(
+                self._config.transcript_template,  # type: ignore[arg-type]
+                undefined=jinja2.StrictUndefined,
+            ).render(**row, text_proc=text_proc)
+            
+            system_prompt = (
+                jinja2.Template(
+                    self._config.system_prompt_template,  # type: ignore[arg-type]
+                    undefined=jinja2.StrictUndefined,
+                ).render(**row, text_proc=text_proc)
+                if self._config.system_prompt_template is not None
+                and not self._args.ignore_system_prompt
+                else None
+            )
+        except jinja2.TemplateError as e:
+            print(f"Error rendering template: {e}")
+            print(f"sample keys: {list(row.keys())}")
+            raise ValueError(
+                "Template rendering failed. Make sure all keys exist."
+            ) from e
+        
+        if not self._args.include_audio:
+            user_content = user_content.replace(
+                types.AUDIO_PLACEHOLDER, f'"{transcript_rendered}"'
+            )
+        
+        messages = _get_messages(
+            user_content,
+            assistant_content,
+            message_history=message_history,
+            sys_prompt=system_prompt,
+        )
+        
+        audio: Optional[np.ndarray] = (
+            self._get_audio(row, self._config.audio_field)
+            if self._args.include_audio
+            else None
+        )
+        
+        return self._make_sample(
+            messages,
+            audio,
+            audio_transcript=transcript_rendered,
+        )
+    
+    def __str__(self):
+        return f"HausaOfflineDataset({self._config.name})"
+    
+    def get_config(self):
+        return self._config
+
+
 class HausaHFDataset(VoiceDataset):
     """
     Dataset class for Hausa dataset that loads:
@@ -505,95 +939,7 @@ class HausaHFDataset(VoiceDataset):
         self._hf_dataset_name = hf_dataset_name
         self._hf_batch_configs = hf_batch_configs if hf_batch_configs else []
         
-        # Import hausa config to get local fallback paths
-        from ultravox.data.configs import hausa
-        self._local_json_paths = {
-            "conversation_pairs_completed_batch_0.json": (
-                hausa.HAUSA_LOCAL_BATCH_0_PATH
-            ),
-            "conversation_pairs_completed_batch_1.json": (
-                hausa.HAUSA_LOCAL_BATCH_1_PATH
-            ),
-            "conversation_pairs_completed_batch_2.json": (
-                hausa.HAUSA_LOCAL_BATCH_2_PATH
-            ),
-        }
-        
-        # Handle multiple JSON files
-        if isinstance(json_file_path, str):
-            if ',' in json_file_path:
-                json_file_paths = [p.strip() for p in json_file_path.split(',')]
-            else:
-                json_file_paths = [json_file_path]
-        else:
-            json_file_paths = json_file_path
-        
-        # Load JSON files for transcript/response pairs
-        json_datasets = []
-        for json_path in json_file_paths:
-            ds = self._load_json_dataset(json_path)
-            json_datasets.append(ds)
-        
-        if len(json_datasets) > 1:
-            json_ds = hf_datasets.concatenate_datasets(json_datasets)
-        else:
-            json_ds = json_datasets[0]
-        
-        # Store HF dataset configs
-        self._hf_dataset_name = hf_dataset_name
-        self._hf_batch_configs = hf_batch_configs
-        
-        # Cache for HF dataset lookups
-        self._hf_audio_cache = {}  # audio_filename -> HF dataset row
-        self._hf_datasets_loaded = False
-        self._hf_audio_indices = {}  # audio_filename -> (batch_idx, hf_idx)
-        
-        # Build audio index upfront to filter JSON entries
-        # This ensures we only split entries that have matching audio
-        print("Building audio index from HuggingFace dataset...")
-        self._load_hf_datasets_if_needed()
-        print(
-            f"Found {len(self._hf_audio_indices)} audio files in "
-            f"HuggingFace dataset"
-        )
-        
-        # Filter JSON dataset to only include entries with matching audio
-        if self._args.include_audio:
-            print(
-                "Filtering JSON entries to match audio files in HF dataset..."
-            )
-            audio_field = self._config.audio_field or "audio_path"
-            
-            def has_matching_audio(row):
-                """Check if row has audio file in HF dataset."""
-                audio_path = row.get(audio_field, "")
-                audio_filename = (
-                    os.path.basename(audio_path) if audio_path else ""
-                )
-                return audio_filename in self._hf_audio_indices
-            
-            # Filter dataset to only keep rows with matching audio
-            json_ds = json_ds.filter(has_matching_audio)
-            total_before = (
-                len(json_datasets[0])
-                if len(json_datasets) == 1
-                else "multiple"
-            )
-            print(
-                f"Filtered to {len(json_ds)} entries with matching audio "
-                f"(from {total_before} total)"
-            )
-        
-        # Apply max_samples limit AFTER loading all data and filtering
-        # This ensures we load everything first, then limit to max_samples
-        if self._args.max_samples > 0 and len(json_ds) > self._args.max_samples:
-            print(
-                f"Limiting dataset to {self._args.max_samples} samples "
-                f"(from {len(json_ds)} total after filtering)"
-            )
-            json_ds = json_ds.select(range(self._args.max_samples))
-        
-        # Split the dataset if needed
+        # Find matching split config
         matching_split = None
         for split in config.splits:
             if split.split == self._args.split:
@@ -603,69 +949,61 @@ class HausaHFDataset(VoiceDataset):
         if matching_split is None:
             raise ValueError(f"No split config found for {self._args.split}")
         
-        # Apply 90/5/5 split on filtered dataset (loads completely first)
-        # Dataset is fully loaded before splitting - always split regardless of number of JSON files
-        split_seed = 42
+        # Cache for HF dataset lookups
+        self._hf_audio_cache = {}
+        self._hf_datasets_loaded = False
+        self._hf_audio_indices = {}
         
-        if self._args.shuffle:
-            json_ds = json_ds.shuffle(seed=split_seed)
+        # Use HuggingFace's built-in splits directly
+        split_name = matching_split.name  # "train", "validation", or "test"
         
-        # First split: train (90%) vs (val+test) (10%)
-        train_pct = 0.9
-        train_val_test = json_ds.train_test_split(
-            train_size=train_pct,
-            seed=split_seed,
-            shuffle=False
+        # Load JSON dataset with the specific split from HuggingFace
+        json_ds = self._load_json_dataset_with_split(
+            json_file_path, split_name
         )
         
-        # Second split: val (5%) vs test (5%) from the remaining 10%
-        # Split the remaining 10% equally: 50% val, 50% test
-        val_test_split = train_val_test["test"].train_test_split(
-            train_size=0.5,
-            seed=split_seed,
-            shuffle=False
-        )
-        
-        if self._args.split == types.DatasetSplit.TRAIN:
-            train_dataset = train_val_test["train"]
-            # Limit train to num_samples if specified (e.g., 2000)
-            if matching_split.num_samples > 0 and len(train_dataset) > matching_split.num_samples:
-                train_dataset = train_dataset.select(range(matching_split.num_samples))
-            self._json_dataset = train_dataset
-        elif self._args.split == types.DatasetSplit.VALIDATION:
-            self._json_dataset = val_test_split["train"]
-        elif self._args.split == types.DatasetSplit.TEST:
-            self._json_dataset = val_test_split["test"]
-        
-        # Calculate actual number of samples from filtered and split dataset
-        try:
-            actual_num_samples = len(self._json_dataset)
-        except (TypeError, NotImplementedError, AttributeError):
-            # Fallback: calculate from total dataset using 90/5/5 proportions
-            try:
-                total_len = len(json_ds)
-                if self._args.split == types.DatasetSplit.TRAIN:
-                    # Use specified num_samples if set, otherwise 90% of total
-                    if matching_split.num_samples > 0:
-                        actual_num_samples = min(matching_split.num_samples, int(total_len * 0.9))
-                    else:
-                        actual_num_samples = int(total_len * 0.9)
-                elif self._args.split == types.DatasetSplit.VALIDATION:
-                    actual_num_samples = int(total_len * 0.05)
-                else:  # TEST
-                    # Test gets the remainder to account for rounding
-                    actual_num_samples = total_len - int(total_len * 0.9) - int(total_len * 0.05)
-            except (TypeError, NotImplementedError, AttributeError):
-                actual_num_samples = (
-                    matching_split.num_samples
-                    if matching_split.num_samples != -1
-                    else 0
+        # Build audio index to filter JSON entries
+        if self._args.include_audio:
+            print("Building audio index from HuggingFace dataset...")
+            self._load_hf_datasets_if_needed()
+            print(
+                f"Found {len(self._hf_audio_indices)} audio files in "
+                f"HuggingFace dataset"
+            )
+            
+            # Filter JSON dataset to only include entries with matching audio
+            print("Filtering JSON entries to match audio files...")
+            audio_field = self._config.audio_field or "audio_path"
+            
+            def has_matching_audio(row):
+                audio_path = row.get(audio_field, "")
+                audio_filename = (
+                    os.path.basename(audio_path) if audio_path else ""
                 )
+                return audio_filename in self._hf_audio_indices
+            
+            total_before = len(json_ds)
+            json_ds = json_ds.filter(has_matching_audio)
+            print(
+                f"Filtered to {len(json_ds)} entries with matching audio "
+                f"(from {total_before} total)"
+            )
         
-        dataset_name = f"{config.name}.{self._args.split.value}"
-        super()._init_dataset(self._json_dataset, dataset_name, actual_num_samples)
+        # Apply max_samples limit
+        if self._args.max_samples > 0 and len(json_ds) > self._args.max_samples:
+            print(
+                f"Limiting dataset to {self._args.max_samples} samples "
+                f"(from {len(json_ds)} total)"
+            )
+            json_ds = json_ds.select(range(self._args.max_samples))
         
-        # Calculate actual number of samples from filtered and split dataset
+        # Apply split-specific num_samples if specified
+        if matching_split.num_samples > 0 and len(json_ds) > matching_split.num_samples:
+            json_ds = json_ds.select(range(matching_split.num_samples))
+        
+        self._json_dataset = json_ds
+        
+        # Calculate actual number of samples
         try:
             actual_num_samples = len(self._json_dataset)
         except (TypeError, NotImplementedError, AttributeError):
@@ -825,143 +1163,68 @@ class HausaHFDataset(VoiceDataset):
         
         return None
     
-    def _load_json_dataset(self, json_file_path: str):
-        """Load JSON file from HuggingFace dataset.
+    def _load_json_dataset_with_split(
+        self, json_file_path: str, split_name: str
+    ):
+        """Load JSON file from HuggingFace dataset with specific split.
         
         json_file_path should start with "hf://" followed by the JSON filename.
-        The method will attempt to load the JSON file from the HF dataset.
+        split_name should be "train", "validation", or "test".
         """
-        # Extract filename from marker
-        # e.g., "hf://conversation_pairs_completed_batch_0.json"
         if not json_file_path.startswith("hf://"):
             raise ValueError(
                 f"Expected JSON path to start with 'hf://', got: {json_file_path}"
             )
         json_filename = json_file_path[5:]  # Remove "hf://" prefix
-
-        # Try to match batch config based on filename (if batch configs exist)
-        # e.g., "conversation_pairs_completed_batch_0.json" -> "hausa-batch-0"
-        batch_idx = None
-        if self._hf_batch_configs:
-            for idx, batch_config in enumerate(self._hf_batch_configs):
-                # Extract batch number from config name
-                # e.g., "hausa-batch-0" -> "0"
-                batch_num = batch_config.split("-")[-1]
-                # Check if JSON filename contains this batch number
-                batch_patterns = [
-                    f"batch_{batch_num}",
-                    f"batch-{batch_num}"
-                ]
-                if any(pattern in json_filename for pattern in batch_patterns):
-                    batch_idx = idx
-                    break
-
-        # Load JSON from HuggingFace dataset
-        # First try loading as data file from matching batch config
-        if batch_idx is not None and self._hf_batch_configs:
-            try:
-                ds = hf_datasets.load_dataset(
-                    self._hf_dataset_name,
-                    self._hf_batch_configs[batch_idx],
-                    data_files=json_filename,
-                    split="train",
-                    trust_remote_code=True,
-                    streaming=False,
-                    download_config=hf_datasets.DownloadConfig(
-                        max_retries=10
-                    ),
-                )
-                return ds
-            except Exception:
-                pass  # Fall through to try other methods
-
-        # Try loading as data file from dataset root (without config)
+        
+        # Load JSON from HuggingFace dataset with the specified split
         try:
             ds = hf_datasets.load_dataset(
                 self._hf_dataset_name,
                 data_files=json_filename,
-                split="train",
+                split=split_name,
                 trust_remote_code=True,
                 streaming=False,
                 download_config=hf_datasets.DownloadConfig(max_retries=10),
             )
             return ds
         except Exception:
-            pass
-
-        # If JSON file not found, try loading the dataset config directly
-        # The JSON data might be embedded in the dataset itself
-        if batch_idx is not None and self._hf_batch_configs:
+            # If split doesn't exist, try loading all splits and select
             try:
-                ds = hf_datasets.load_dataset(
+                all_ds = hf_datasets.load_dataset(
                     self._hf_dataset_name,
-                    self._hf_batch_configs[batch_idx],
-                    split="train",
+                    data_files=json_filename,
                     trust_remote_code=True,
                     streaming=False,
-                    download_config=hf_datasets.DownloadConfig(
-                        max_retries=10
-                    ),
+                    download_config=hf_datasets.DownloadConfig(max_retries=10),
                 )
-                # If dataset has transcript/response fields, use directly
-                if ("transcript" in ds.column_names and
-                        "response" in ds.column_names):
-                    return ds
-            except Exception:
-                pass
-        elif not self._hf_batch_configs:
-            # No batch configs - try loading from dataset root
-            try:
-                ds = hf_datasets.load_dataset(
-                    self._hf_dataset_name,
-                    split="train",
-                    trust_remote_code=True,
-                    streaming=False,
-                    download_config=hf_datasets.DownloadConfig(
-                        max_retries=10
-                    ),
-                )
-                # If dataset has transcript/response fields, use directly
-                if ("transcript" in ds.column_names and
-                        "response" in ds.column_names):
-                    return ds
-            except Exception:
-                pass
-
-        # If all HF attempts failed, try loading from local fallback
-        if json_filename in self._local_json_paths:
-            local_path = self._local_json_paths[json_filename]
-            if os.path.exists(local_path):
-                print(
-                    f"⚠️  JSON file '{json_filename}' not found in HuggingFace. "
-                    f"Falling back to local file: {local_path}"
-                )
-                try:
-                    ds = hf_datasets.load_dataset(
-                        "json",
-                        data_files=local_path,
-                        split="train",
-                        trust_remote_code=True,
-                        streaming=False,
-                        download_config=hf_datasets.DownloadConfig(
-                            max_retries=10
-                        ),
-                    )
-                    return ds
-                except Exception as e:
+                if split_name in all_ds:
+                    return all_ds[split_name]
+                elif "train" in all_ds:
                     print(
-                        f"ERROR: Could not load local JSON file "
-                        f"'{local_path}': {e}"
+                        f"⚠️  Split '{split_name}' not found, using 'train'"
                     )
-        
-        raise ValueError(
-            f"Could not load JSON file '{json_filename}' from "
-            f"HuggingFace dataset '{self._hf_dataset_name}' or local fallback. "
-            f"Make sure the JSON file exists in the dataset as a data file, "
-            f"the dataset contains 'transcript' and 'response' columns, "
-            f"or the local file exists at: "
-            f"{self._local_json_paths.get(json_filename, 'N/A')}"
-        )
+                    return all_ds["train"]
+                else:
+                    first_split = list(all_ds.keys())[0]
+                    print(
+                        f"⚠️  Split '{split_name}' not found, using "
+                        f"'{first_split}'"
+                    )
+                    return all_ds[first_split]
+            except Exception as e2:
+                raise ValueError(
+                    f"Could not load JSON file '{json_filename}' from "
+                    f"HuggingFace dataset '{self._hf_dataset_name}' with "
+                    f"split '{split_name}'. Error: {e2}"
+                ) from e2
+    
+    def _load_json_dataset(self, json_file_path: str):
+        """
+        Load JSON file from HuggingFace dataset 
+        (legacy method for compatibility)
+        """
+        return self._load_json_dataset_with_split(json_file_path, "train")
     
     def _get_audio(
         self, row: transformers.BatchFeature, column_name: Optional[str] = None
