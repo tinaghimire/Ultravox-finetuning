@@ -172,6 +172,22 @@ class TrainConfig:
     # Tags for wandb
     run_tags: List[str] = simple_parsing.list_field()
 
+    # ---------------------------------------------------------------------------
+    # HuggingFace Hub upload configuration
+    # ---------------------------------------------------------------------------
+    # Upload checkpoints to HuggingFace Hub after each save_steps
+    hub_upload_enabled: bool = False
+    # Base HuggingFace Hub repository (e.g., "vaghawan/hausa-ultravox-stage1")
+    hub_repo: Optional[str] = None
+    # Tag/suffix for best model repo (default: "best")
+    hub_best_tag: str = "best"
+    # Tag/suffix for last model repo (default: "last")
+    hub_last_tag: str = "last"
+    # Upload best checkpoint (default: True)
+    hub_upload_best: bool = True
+    # Upload last checkpoint (default: True)
+    hub_upload_last: bool = True
+
     verbose: bool = False
 
     # Augmentations

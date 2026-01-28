@@ -24,6 +24,7 @@ from ultravox.training import config_base
 from ultravox.training import ddp_utils
 from ultravox.training import model_types
 from ultravox.training import trainer as ultra_trainer
+from ultravox.training.callbacks import hub_upload_callback
 from ultravox.training.helpers import prefetch_weights
 from ultravox.utils import device_helpers
 from ultravox.utils import monkey_patches
@@ -309,6 +310,11 @@ def train(config: config_base.TrainConfig):
             logging_first_step=True,
             logging_dir=str(config.logs_dir),
             logging_steps=config.logging_steps,
+            load_best_model_at_end=True,
+            metric_for_best_model="eval_loss",
+            greater_is_better=False,
+            save_total_limit=3,
+            save_best_model=True,
             # TODO (Farzad): reconsider for multi-node
             # In DDP world_size is set to num_gpus and we want process-0 to split the batches
             # If use use dynamic_batch, the batch size here has to be 1
@@ -347,6 +353,23 @@ def train(config: config_base.TrainConfig):
             },
         ),
     )
+
+    # Add Hub upload callback if enabled
+    if config.hub_upload_enabled and config.hub_repo:
+        hub_callback = hub_upload_callback.HubUploadCallback(
+            hub_repo=config.hub_repo,
+            best_tag=config.hub_best_tag,
+            last_tag=config.hub_last_tag,
+            device=config.device,
+            upload_best=config.hub_upload_best,
+            upload_last=config.hub_upload_last,
+        )
+        trainer.add_callback(hub_callback)
+        logging.info(
+            f"Hub upload callback enabled: "
+            f"{config.hub_repo}-{config.hub_best_tag} and "
+            f"{config.hub_repo}-{config.hub_last_tag}"
+        )
 
     caught_exception = None
     if config.do_train:
