@@ -222,6 +222,17 @@ def train(config: config_base.TrainConfig):
         verbose=is_local_master,
     )
     if is_global_master:
+        # Print dataset summary before training
+        print("\n" + "=" * 70)
+        print("DATASET SIZE SUMMARY - BEFORE TRAINING")
+        print("=" * 70)
+        
+        # Print train dataset size
+        train_size = len(train_dataset)
+        print(f"  TRAIN SAMPLES:     {train_size:>15,} samples")
+        
+        # Calculate and print validation dataset sizes
+        val_total = 0
         for val_opt in config.get_val_sets():
             val_dataset = prepare_dataset(
                 train_args=config,
@@ -231,6 +242,37 @@ def train(config: config_base.TrainConfig):
                 verbose=is_local_master,
             )
             val_datasets[val_opt.name] = val_dataset
+            val_size = len(val_dataset)
+            val_total += val_size
+            print(f"  VALIDATION ({val_opt.name:20s}): {val_size:>15,} samples")
+        
+        print(f"  TOTAL VAL SAMPLES: {val_total:>15,} samples")
+        print("-" * 70)
+        
+        # Calculate and print test dataset sizes if available
+        test_total = 0
+        if hasattr(config, 'test_sets') and config.test_sets:
+            for test_opt_dict in config.test_sets:
+                test_opt = datasets.DatasetOptions(**test_opt_dict)
+                test_dataset = prepare_dataset(
+                    train_args=config,
+                    model_pack=model_pack,
+                    data_opts=[test_opt],
+                    data_args=config.val_dataset_args,  # Use val args for test
+                    verbose=is_local_master,
+                )
+                test_size = len(test_dataset)
+                test_total += test_size
+                print(f"  TEST ({test_opt.name:22s}): {test_size:>15,} samples")
+            if test_total > 0:
+                print(f"  TOTAL TEST SAMPLES:  {test_total:>15,} samples")
+                print("-" * 70)
+        
+        # Print grand total
+        grand_total = train_size + val_total + test_total
+        print(f"  GRAND TOTAL:       {grand_total:>15,} samples")
+        print("=" * 70 + "\n")
+        
         logging.info(
             f"Loaded {len(config.train_sets)}) data sets, sample limit: {config.train_dataset_args.max_samples} (val sample limit: {config.val_dataset_args.max_samples})"
         )

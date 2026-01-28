@@ -90,32 +90,68 @@ def create_dataset(
     if verbose:
         logging.info(f"Creating dataset {name} with config:\n{merged_config}")
     
-    # Check if this is a local JSON file dataset (by checking if path contains .json)
+    # Check for Hausa datasets
     import os
-    if merged_config.path and '.json' in merged_config.path:
-        # Check if this is the Hausa dataset - use Hugging Face for audio
-        if name.startswith('hausa'):
-            # Import Hausa config to get HF dataset info
-            from ultravox.data.configs import hausa
-            dataset = datasets.HausaHFDataset(
-                args,
-                merged_config,
-                merged_config.path,
-                hausa.HAUSA_HF_DATASET_NAME,
-                hausa.HAUSA_HF_BATCH_CONFIGS
+    if name.startswith('hausa-huggingface'):
+        # Hausa HuggingFace dataset - direct load from HF
+        from ultravox.data.configs import hausa
+        if args.max_samples == -1 and hausa.HAUSA_MAX_DATASET_SIZE > 0:
+            args = dataclasses.replace(
+                args, max_samples=hausa.HAUSA_MAX_DATASET_SIZE
+            )
+        dataset = datasets.HausaHFDatasetDirect(
+            args,
+            merged_config,
+            hausa.HAUSA_HF_DATASET_NAME,
+            hausa.HAUSA_HF_BATCH_CONFIGS
+        )
+    elif name.startswith('hausa-offline'):
+        # Hausa offline dataset - load from local JSON and audio files
+        from ultravox.data.configs import hausa
+        if args.max_samples == -1 and hausa.HAUSA_MAX_DATASET_SIZE > 0:
+            args = dataclasses.replace(
+                args, max_samples=hausa.HAUSA_MAX_DATASET_SIZE
+            )
+        dataset = datasets.HausaOfflineDataset(
+            args,
+            merged_config,
+            hausa.HAUSA_OFFLINE_DATASET_DIR,
+            hausa.HAUSA_OFFLINE_AUDIO_DIR
+        )
+    elif merged_config.path and '.json' in merged_config.path:
+        # Other local JSON file datasets
+        if ',' in merged_config.path:
+            first_path = merged_config.path.split(',')[0].strip()
+            json_dir = (
+                os.path.dirname(first_path)
+                if os.path.exists(first_path) else None
             )
         else:
-            # For other datasets, use LocalJsonDataset with local files
-            if ',' in merged_config.path:
-                first_path = merged_config.path.split(',')[0].strip()
-                json_dir = os.path.dirname(first_path) if os.path.exists(first_path) else None
-            else:
-                json_dir = os.path.dirname(merged_config.path) if os.path.exists(merged_config.path) else None
-            
-            audio_base_dir = json_dir
-            dataset = datasets.LocalJsonDataset(args, merged_config, merged_config.path, audio_base_dir)
+            json_dir = (
+                os.path.dirname(merged_config.path)
+                if os.path.exists(merged_config.path) else None
+            )
+        audio_base_dir = json_dir
+        dataset = datasets.LocalJsonDataset(
+            args, merged_config, merged_config.path, audio_base_dir
+        )
     else:
         dataset = datasets.GenericDataset(args, merged_config)
+    
+    # Print dataset size information
+    if hasattr(dataset, '__len__'):
+        try:
+            dataset_size = len(dataset)
+            split_type = args.split.value if hasattr(args, 'split') else 'unknown'
+            print(f"\n{'='*70}")
+            print(f"DATASET LOADED: {name}")
+            print(f"{'='*70}")
+            print(f"  Split Type: {split_type.upper()}")
+            print(f"  Total Samples: {dataset_size:,}")
+            print(f"{'='*70}\n")
+        except (TypeError, NotImplementedError):
+            pass
+    
     return dataset
 
 
