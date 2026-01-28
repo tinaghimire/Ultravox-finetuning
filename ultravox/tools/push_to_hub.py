@@ -15,7 +15,6 @@ from ultravox.model import ultravox_model
 from ultravox.model import ultravox_pipeline
 from ultravox.utils import device_helpers
 
-
 # This script is used to upload a model to the HuggingFace Hub, for either internal or external consumption.
 # Ex: python -m ultravox.tools.push_to_hub -m wandb://fixie/ultravox/<model_path> -u fixie-ai/ultravox-vXYZ
 @dataclasses.dataclass

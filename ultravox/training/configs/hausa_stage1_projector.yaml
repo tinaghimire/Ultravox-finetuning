@@ -1,11 +1,8 @@
 # Stage 1: Train only the adapter/projector
 # Audio tower and LLM are frozen by default
 
-text_model: "zai-org/GLM-4.6"
-audio_model: "openai/whisper-large-v3-turbo"
-
-# Only projector will be trained (default behavior)
-# No LoRA configs = audio_tower and language_model are frozen
+text_model: "meta-llama/Llama-3.3-70B-Instruct"
+audio_model: "openai/whisper-large-v3"
 
 # Dataset configuration
 # Use HuggingFace datasets (from vaghawan/hausa-audio-resampled)
@@ -13,46 +10,41 @@ train_sets:
   - name: hausa-huggingface-train
 val_sets:
   - name: hausa-huggingface-val
-test_sets:
-  - name: hausa-huggingface-test
 
-# Alternative: Use offline datasets (local files)
-# train_sets:
-#   - name: hausa-offline-train
-# val_sets:
-#   - name: hausa-offline-val
-# test_sets:
-#   - name: hausa-offline-test
+loss_config:
+  loss_function: "KL_Divergence"
 
 # Training configuration - Epoch-based training
-num_epochs: 100  # Train for 100 epochs
-max_steps: 0  # 0 means use num_epochs; > 0 overrides num_epochs
-batch_size: 32  # Increased from 10 to 32 for better GPU utilization
-grad_accum_steps: 2  # Effective batch size = 32 * 2 = 64
-lr: 5e-4
-lr_warmup_steps: 1000
+max_steps: 120000 # 20 epochs
+batch_size: 24  # Per-GPU batch size for 4x A100 80GB with FSDP
+# Effective batch size = batch_size * num_gpus = 24 * 4 = 96
 
-# Data loading configuration
-num_workers: 8  # Parallel data loading workers
+# Learning rate configuration for projector-only training
+# Since only projector is trainable (audio tower & LLM frozen), higher LR is safe
+lr: 5e-4  # Higher LR for projector-only (vs 1e-4 for full training, 5e-5 for LoRA)
+lr_warmup_steps: 1000  # Warmup steps for stability with 70B model
+
+# Multi-GPU configuration for 4x A100 GPUs
+use_fsdp: true  # Required for Llama-3.3-70B on 4x A100 GPUs
 
 # Logging and saving configuration
-# Note: logging_steps, save_steps, val_steps can be:
-#   - Integer: exact number of steps
-#   - Float (0-1): fraction of steps per epoch
-# Example: If steps_per_epoch=100, logging_steps=0.1 means every 10 steps
-logging_steps: 100  # Log metrics every 10 steps (integer = exact steps)
-save_steps: 500  # Save checkpoint every 500 steps (integer = exact steps)
+logging_steps: 1000  # Log metrics every 10 steps (integer = exact steps)
+save_steps: 5000  # Save checkpoint every 500 steps (integer = exact steps)
+val_steps: 5000  # Evaluate every 500 steps (integer = exact steps)
 
 # Validation configuration
-val_steps: 500  # Validate every 500 steps (integer = exact steps)
-val_batch_size: 32  # Match training batch size
-do_eval: true  # Enable evaluation on val_sets during training
+val_batch_size: 24  # Match training batch size (per GPU)
+do_eval: false  # Evaluation not supported with FSDP - set to false
 
-# FSDP configuration
-# FSDP (Fully Sharded Data Parallel) is better for training because:
-# 1. Memory efficiency: Shards model parameters across GPUs, reducing memory per GPU
-# 2. Scalability: Can train larger models with limited GPU memory
-# 3. Performance: Better GPU utilization for large models
-# 4. Gradient synchronization: Efficient gradient communication across GPUs
-# Enable if training on multiple GPUs with large models
-use_fsdp: true  # Set to true for multi-GPU training with large models
+report_logs_to: ["wandb"]
+output_dir: "./output"
+
+# HuggingFace Hub upload configuration
+# Upload checkpoints to Hub after each save_steps (overrides previous uploads)
+hub_upload_enabled: true
+hub_repo: "vaghawan/hausa-ultravox-stage1"
+hub_best_tag: "best"
+hub_last_tag: "last"
+hub_upload_best: true
+hub_upload_last: true
+
