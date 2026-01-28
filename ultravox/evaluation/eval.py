@@ -113,10 +113,17 @@ def infer_dataset_shard(
 
         batch_references = []
         for sample in batch_samples:
+            if not sample.messages:
+                raise ValueError(
+                    "Sample has no messages to process"
+                )
             assistant_message = sample.messages.pop()
             if assistant_message["role"] != "assistant":
                 raise ValueError(
-                    f"Expected assistant message but got: role={assistant_message['role']}, content={assistant_message['content']}"
+                    "Expected assistant message but got: role=",
+                    assistant_message['role'],
+                    ",content=",
+                    assistant_message['content'],
                 )
             batch_references.append(assistant_message["content"])
         batch_output = inference.infer_batch(
@@ -127,6 +134,10 @@ def infer_dataset_shard(
         for index, sample, output, reference in zip(
             batch_indices, batch_samples, batch_output, batch_references
         ):
+            if not sample.messages:
+                raise ValueError(
+                    "Sample has no messages remaining after removing assistant message"
+                )
             result = eval_types.Sample(
                 index=index,
                 question=sample.messages[-1]["content"],
@@ -248,8 +259,6 @@ def eval_datasets(
 
                     if aug_config is not None:
                         aug_name = aug_config.name
-
-                    if aug_config is not None:
                         logging.info(
                             f"Eval: {dataset.name}, {aug_name}, {dataset_config.eval_config.metric}: {eval_result.score:.2f}"
                         )
@@ -269,11 +278,26 @@ def eval_datasets(
                     # Compute additional metrics if specified
                     if dataset_config.eval_config.additional_metrics:
                         for additional_metric in dataset_config.eval_config.additional_metrics:
+                            if not isinstance(additional_metric, dict):
+                                logging.warning(
+                                    f"Skipping invalid additional_metric (not a dict): {additional_metric}"
+                                )
+                                continue
                             metric_name = additional_metric.get("metric")
                             metric_args = additional_metric.get("args", {})
-                            if metric_name:
+                            if not metric_name:
+                                logging.warning(
+                                    f"Skipping additional_metric with missing 'metric' key: {additional_metric}"
+                                )
+                                continue
+                            if not isinstance(metric_args, dict):
+                                logging.warning(
+                                    f"Invalid 'args' for metric {metric_name}, expected dict, got {type(metric_args)}. Using empty dict."
+                                )
+                                metric_args = {}
+                            try:
                                 # Create a temporary EvalConfig for the additional metric
-                                additional_config = types.EvalConfig(
+                                additional_config = data.types.EvalConfig(
                                     metric=metric_name,
                                     args=metric_args,
                                 )
@@ -290,6 +314,11 @@ def eval_datasets(
                                         additional_result.score,
                                     )
                                 )
+                            except Exception as e:
+                                logging.error(
+                                    f"Failed to compute additional metric {metric_name} for {dataset.name}: {e}"
+                                )
+                                continue
 
                     if wandb.run:
                         wandb.run.log(
@@ -337,7 +366,8 @@ def main(override_sys_args: Optional[List[str]] = None):
 
     if device_helpers.is_distributed() and not dist.is_initialized():
         dist.init_process_group(backend="cpu:gloo,cuda:nccl")
-        torch.cuda.set_device(device_helpers.get_local_rank())
+        if torch.cuda.is_available():
+            torch.cuda.set_device(device_helpers.get_local_rank())
 
     if device_helpers.is_global_master():
         if config.output_dir:

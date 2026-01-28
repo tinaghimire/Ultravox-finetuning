@@ -40,11 +40,11 @@ num_workers: 8  # Parallel data loading workers
 #   - Integer: exact number of steps
 #   - Float (0-1): fraction of steps per epoch
 # Example: If steps_per_epoch=100, logging_steps=0.1 means every 10 steps
-logging_steps: 50  # Log metrics every 50 steps (integer = exact steps)
+logging_steps: 100  # Log metrics every 10 steps (integer = exact steps)
 save_steps: 500  # Save checkpoint every 500 steps (integer = exact steps)
 
 # Validation configuration
-val_steps: 200  # Validate every 200 steps (integer = exact steps)
+val_steps: 500  # Validate every 500 steps (integer = exact steps)
 val_batch_size: 32  # Match training batch size
 do_eval: true  # Enable evaluation on val_sets during training
 
