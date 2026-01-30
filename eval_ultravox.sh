@@ -9,15 +9,18 @@
 #
 # Usage: ./eval_ultravox.sh [OPTIONS]
 #   -c, --config CONFIG_PATH    Path to evaluation config file (default: ultravox/evaluation/configs/eval_config_hausa.yaml)
+#   -g, --gpus NUM_GPUS        Number of GPUs to use (default: 1)
 #   -h, --help                 Show this help message
 
 set -e  # Exit on error
 
 # Default values
 DEFAULT_CONFIG="ultravox/evaluation/configs/eval_config_hausa.yaml"
+DEFAULT_GPUS=1
 
 # Parse command line arguments
 CONFIG_PATH="$DEFAULT_CONFIG"
+NUM_GPUS="$DEFAULT_GPUS"
 
 show_help() {
     echo "Ultravox Evaluation Setup Script"
@@ -32,10 +35,13 @@ show_help() {
     echo "Options:"
     echo "  -c, --config CONFIG_PATH    Path to evaluation config file"
     echo "                              (default: $DEFAULT_CONFIG)"
+    echo "  -g, --gpus NUM_GPUS        Number of GPUs to use (default: $DEFAULT_GPUS)"
+    echo "                              Use 2+ GPUs for tensor parallelism with large models (70B)"
     echo "  -h, --help                 Show this help message"
     echo ""
-    echo "Example:"
-    echo "  $0 --config ultravox/evaluation/configs/eval_config_hausa.yaml"
+    echo "Examples:"
+    echo "  $0 --config ultravox/evaluation/configs/eval_config_hausa.yaml --gpus 1"
+    echo "  $0 --config ultravox/evaluation/configs/eval_config_hausa.yaml --gpus 2"
     exit 0
 }
 
@@ -43,6 +49,10 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         -c|--config)
             CONFIG_PATH="$2"
+            shift 2
+            ;;
+        -g|--gpus)
+            NUM_GPUS="$2"
             shift 2
             ;;
         -h|--help)
@@ -55,6 +65,12 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Validate NUM_GPUS is a positive integer
+if ! [[ "$NUM_GPUS" =~ ^[1-9][0-9]*$ ]]; then
+    print_error "Number of GPUs must be a positive integer, got: $NUM_GPUS"
+    exit 1
+fi
 
 # Color codes for output
 RED='\033[0;31m'
@@ -88,6 +104,7 @@ main() {
     echo ""
     echo "Configuration:"
     echo "  Config file: $CONFIG_PATH"
+    echo "  Number of GPUs: $NUM_GPUS"
     echo ""
     
     # Check sudo access
@@ -293,6 +310,7 @@ EOF
     echo "Would you like to start evaluation now? (y/n)"
     echo "Note: This will run evaluation on the test set"
     echo "Config file: $CONFIG_PATH"
+    echo "Number of GPUs: $NUM_GPUS"
     echo "================================================"
     read -r START_EVAL
     
@@ -305,17 +323,29 @@ EOF
             exit 1
         fi
         
-        # Run evaluation
-        print_status "Running evaluation..."
-        echo "Running: poetry run python -m ultravox.evaluation.eval --config_path $CONFIG_PATH"
-        poetry run python -m ultravox.evaluation.eval --config_path $CONFIG_PATH
+        # Run evaluation - use torchrun for multi-GPU, regular python for single GPU
+        if [ "$NUM_GPUS" -gt 1 ]; then
+            print_status "Running evaluation with $NUM_GPUS GPUs (tensor parallelism)..."
+            echo "Running: poetry run torchrun --nproc_per_node=$NUM_GPUS -m ultravox.evaluation.eval --config_path $CONFIG_PATH"
+            poetry run torchrun --nproc_per_node=$NUM_GPUS \
+                -m ultravox.evaluation.eval \
+                --config_path $CONFIG_PATH
+        else
+            print_status "Running evaluation with single GPU..."
+            echo "Running: poetry run python -m ultravox.evaluation.eval --config_path $CONFIG_PATH"
+            poetry run python -m ultravox.evaluation.eval --config_path $CONFIG_PATH
+        fi
     else
         print_status "Skipping evaluation. You can run it later with:"
         echo ""
         echo "  cd Ultravox-finetuning"
         echo "  source venv/bin/activate"
         echo "  set -a && source .env && set +a"
-        echo "  poetry run python -m ultravox.evaluation.eval --config_path $CONFIG_PATH"
+        if [ "$NUM_GPUS" -gt 1 ]; then
+            echo "  poetry run torchrun --nproc_per_node=$NUM_GPUS -m ultravox.evaluation.eval --config_path $CONFIG_PATH"
+        else
+            echo "  poetry run python -m ultravox.evaluation.eval --config_path $CONFIG_PATH"
+        fi
         echo ""
     fi
     
@@ -331,10 +361,16 @@ EOF
     echo "  set -a && source .env && set +a"
     echo ""
     echo "To run evaluation manually:"
-    echo "  poetry run python -m ultravox.evaluation.eval --config_path $CONFIG_PATH"
+    if [ "$NUM_GPUS" -gt 1 ]; then
+        echo "  # Multi-GPU with tensor parallelism:"
+        echo "  poetry run torchrun --nproc_per_node=$NUM_GPUS -m ultravox.evaluation.eval --config_path $CONFIG_PATH"
+    else
+        echo "  # Single GPU:"
+        echo "  poetry run python -m ultravox.evaluation.eval --config_path $CONFIG_PATH"
+    fi
     echo ""
     echo "To run this script with custom settings:"
-    echo "  ./eval_ultravox.sh --config path/to/eval_config.yaml"
+    echo "  ./eval_ultravox.sh --config path/to/eval_config.yaml --gpus 2"
     echo "  ./eval_ultravox.sh --help    # Show all options"
     echo ""
     echo "Note: If pyenv or just commands are not found in new terminals,"
