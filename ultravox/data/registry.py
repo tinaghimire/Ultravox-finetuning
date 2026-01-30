@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 
 # Make datasets import optional for Python 3.8 compatibility
 try:
-    from ultravox.data import datasets
+from ultravox.data import datasets
 except ImportError:
     datasets = None  # datasets not available
 from ultravox.data import types
