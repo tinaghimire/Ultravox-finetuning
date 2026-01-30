@@ -166,14 +166,26 @@ def train(config: config_base.TrainConfig):
     # Starting W&B. HF Trainer can also do this, but this way we can include the config.
     # Initializing sooner also means more of the stdout logs are captured by W&B.
     if "wandb" in config.report_logs_to and is_global_master:
-        wandb.init(
-            project=os.getenv("WANDB_PROJECT", "ultravox"),
-            config=dataclasses.asdict(config),
-            name=config.exp_name,
-            dir="runs",
-            tags=config.run_tags,
-            save_code=True,
-        )
+        # Resume existing W&B run if resuming from checkpoint
+        if config.resume_from_load_dir and config.model_load_dir:
+            wandb_run_id = "uljblbp5"  # Run ID from checkpoint-4000
+            logging.info(f"Resuming W&B run: {wandb_run_id}")
+            wandb.init(
+                project=os.getenv("WANDB_PROJECT", "ultravox"),
+                id=wandb_run_id,
+                resume="must",
+                dir="runs",
+            )
+        else:
+            # Create new W&B run
+            wandb.init(
+                project=os.getenv("WANDB_PROJECT", "ultravox"),
+                config=dataclasses.asdict(config),
+                name=config.exp_name,
+                dir="runs",
+                tags=config.run_tags,
+                save_code=True,
+            )
 
     if config.ignore_data_skip and config.resume_from_load_dir:
         new_shuffle_seed = random.randint(1000, 1999)
@@ -314,7 +326,6 @@ def train(config: config_base.TrainConfig):
             metric_for_best_model="eval_loss",
             greater_is_better=False,
             save_total_limit=3,
-            save_best_model=True,
             # TODO (Farzad): reconsider for multi-node
             # In DDP world_size is set to num_gpus and we want process-0 to split the batches
             # If use use dynamic_batch, the batch size here has to be 1

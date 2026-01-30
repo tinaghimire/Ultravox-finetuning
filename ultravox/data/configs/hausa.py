@@ -19,6 +19,11 @@ HAUSA_HF_BATCH_CONFIGS = [
 # Dataset size limit (-1 = use all data)
 HAUSA_MAX_DATASET_SIZE = -1
 
+# Sharding and worker configuration
+HAUSA_N_SHARDS = 16  # Number of shards for parallel data loading
+HAUSA_NUM_WORKERS = 8  # Number of worker processes for data loading
+
+
 # HuggingFace dataset configs
 HAUSA_HF_BASE_CONFIG = types.DatasetConfig(
     name="hausa-huggingface",
