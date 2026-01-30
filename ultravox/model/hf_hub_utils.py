@@ -30,7 +30,7 @@ def download_hf_model(model_id: str, use_hf_transfer: bool = False) -> str:
         os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
 
     return huggingface_hub.snapshot_download(
-        repo_id=model_id, allow_patterns=ALLOW_PATTERNS
+        repo_id=model_id, allow_patterns=ALLOW_PATTERNS, max_workers=8
     )
 
 

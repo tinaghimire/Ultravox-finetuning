@@ -5,7 +5,20 @@ text_model: "zai-org/GLM-4.6"
 audio_model: "openai/whisper-large-v3-turbo"
 
 # Load checkpoint from Stage 2 (update path after Stage 2 completes)
-model_load_dir: "outputs/hausa_stage2_audio_lora/checkpoint-<num_steps>"  # Update with actual checkpoint path
+model_load_dir: "./output/checkpoint-<num_steps>"  # Update with actual checkpoint path
+
+# Dataset configuration
+# Use HuggingFace datasets (from vaghawan/hausa-audio-resampled)
+train_sets:
+  - name: hausa-huggingface-train
+val_sets:
+  - name: hausa-huggingface-val
+
+val_dataset_args:
+  max_samples: 64000  # Use all validation samples
+
+loss_config:
+  loss_function: "KL_Divergence"
 
 # Keep audio LoRA from Stage 2 (loaded from checkpoint)
 audio_model_lora_config:
@@ -27,20 +40,37 @@ text_model_lora_config:
     - "v_proj"
     - "o_proj"
 
-train_sets:
-  - name: hausa-train
-val_sets:
-  - name: hausa-val
-
-batch_size: 6            # Smaller batch due to more trainable parameters
+# Training configuration
 max_steps: 500
+batch_size: 6            # Per-GPU batch size (smaller due to more trainable parameters)
+# Effective batch size = batch_size * num_gpus
+
+# Learning rate configuration for LLM LoRA fine-tuning
 lr: 2e-5                 # Even lower learning rate for LLM fine-tuning
 lr_warmup_steps: 50
-save_steps: 100
-logging_steps: 50
+
+# Multi-GPU configuration
+use_fsdp: true  # Enable FSDP for multi-GPU training
+bf16_training: true  # Enable bfloat16 mixed precision training
+
+# Logging and saving configuration
+logging_steps: 50        # Log metrics every 50 steps (integer = exact steps)
+save_steps: 100          # Save checkpoint every 100 steps (integer = exact steps)
+val_steps: 100           # Evaluate every 100 steps (integer = exact steps)
 
 # Validation configuration
-val_steps: 1.0  # Validate every epoch (when using num_epochs) or set to steps_per_epoch
-val_batch_size: 4
-do_eval: true  # Enable evaluation on val_sets during training
+val_batch_size: 4        # Match training batch size (per GPU)
+do_eval: true            # Enable evaluation on val_sets during training
+
+report_logs_to: ["wandb"]
+output_dir: "./output"
+
+# HuggingFace Hub upload configuration
+# Upload checkpoints to Hub after each save_steps (overrides previous uploads)
+hub_upload_enabled: true
+hub_repo: "vaghawan/hausa-ultravox-stage3"
+hub_best_tag: "best"
+hub_last_tag: "last"
+hub_upload_best: true
+hub_upload_last: true
 

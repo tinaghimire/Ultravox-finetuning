@@ -637,7 +637,12 @@ class HausaHFDatasetDirect(VoiceDataset):
         
         dataset_name = f"{config.name}.{self._args.split.value}"
         super()._init_dataset(combined_ds, dataset_name, actual_num_samples)
-    
+
+        # Set n_shards attribute for parallel data loading
+        # Import here to avoid circular imports
+        from ultravox.data.configs import hausa
+        self._dataset.n_shards = hausa.HAUSA_N_SHARDS
+
     def _get_sample(self, row) -> Optional[data_sample.VoiceSample]:
         """Convert row to VoiceSample using templates."""
         message_history = None

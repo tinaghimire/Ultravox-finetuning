@@ -11,12 +11,15 @@ train_sets:
 val_sets:
   - name: hausa-huggingface-val
 
+val_dataset_args:
+  max_samples: 64000  # Use all validation samples
+
 loss_config:
   loss_function: "KL_Divergence"
 
 # Training configuration - Epoch-based training
 max_steps: 120000 # 20 epochs
-batch_size: 24  # Per-GPU batch size for 4x A100 80GB with FSDP
+batch_size: 4  # Per-GPU batch size for 4x A100 80GB with FSDP
 # Effective batch size = batch_size * num_gpus = 24 * 4 = 96
 
 # Learning rate configuration for projector-only training
@@ -26,15 +29,16 @@ lr_warmup_steps: 1000  # Warmup steps for stability with 70B model
 
 # Multi-GPU configuration for 4x A100 GPUs
 use_fsdp: true  # Required for Llama-3.3-70B on 4x A100 GPUs
+bf16_training: true  # Enable bfloat16 mixed precision training to reduce memory usage
 
 # Logging and saving configuration
-logging_steps: 1000  # Log metrics every 10 steps (integer = exact steps)
-save_steps: 5000  # Save checkpoint every 500 steps (integer = exact steps)
-val_steps: 5000  # Evaluate every 500 steps (integer = exact steps)
+logging_steps: 100  # Log metrics every 10 steps (integer = exact steps)
+save_steps: 1000  # Save checkpoint every 500 steps (integer = exact steps)
+val_steps: 1000  # Evaluate every 500 steps (integer = exact steps)
 
 # Validation configuration
-val_batch_size: 24  # Match training batch size (per GPU)
-do_eval: false  # Evaluation not supported with FSDP - set to false
+val_batch_size: 4  # Match training batch size (per GPU)
+do_eval: true  # Evaluation not supported with FSDP - set to false
 
 report_logs_to: ["wandb"]
 output_dir: "./output"
@@ -48,3 +52,6 @@ hub_last_tag: "last"
 hub_upload_best: true
 hub_upload_last: true
 
+# Load from checkpoint
+model_load_dir: "./output/checkpoint-4000"  # Local path to your checkpoint
+resume_from_load_dir: true 

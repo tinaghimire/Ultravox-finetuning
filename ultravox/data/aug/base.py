@@ -1,5 +1,5 @@
 import random
-from typing import List, Optional, overload
+from typing import List, Optional, overload, Dict, Tuple, Any, Union
 
 import numpy as np
 
@@ -20,7 +20,7 @@ class Augmentation:
         self.children = children or []
         self.sample_rate = args.sample_rate
 
-    def __call__(self, audio: np.ndarray | None) -> np.ndarray | None:
+    def __call__(self, audio: Optional[np.ndarray]) -> Optional[np.ndarray]:
         """Apply augmentation with probability p unless dataset is excluded."""
         if random.random() > self.p:
             return audio
@@ -41,7 +41,7 @@ class Augmentation:
     @overload
     def apply(self, audio: np.ndarray) -> np.ndarray: ...
 
-    def apply(self, audio: np.ndarray | None) -> np.ndarray | None:
+    def apply(self, audio: Optional[np.ndarray]) -> Optional[np.ndarray]:
         """Apply this augmentation."""
         if audio is None:
             return None

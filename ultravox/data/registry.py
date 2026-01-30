@@ -2,7 +2,11 @@ import dataclasses
 import logging
 from typing import Dict, List, Optional
 
-from ultravox.data import datasets
+# Make datasets import optional for Python 3.8 compatibility
+try:
+    from ultravox.data import datasets
+except ImportError:
+    datasets = None  # datasets not available
 from ultravox.data import types
 from ultravox.data.configs import ami
 from ultravox.data.configs import audiobench
