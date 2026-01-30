@@ -3,6 +3,10 @@
 # Ultravox Finetuning Setup Script
 # This script automates the setup process for Ultravox finetuning environment
 #
+# Prerequisites:
+#   - Clone the repository first: git clone https://github.com/tinaghimire/Ultravox-finetuning.git
+#   - Run this script from the parent directory or inside Ultravox-finetuning/
+#
 # Usage: ./setup_ultravox.sh [OPTIONS]
 #   -c, --config CONFIG_PATH    Path to training config file (default: ultravox/training/configs/hausa_stage1_projector.yaml)
 #   -g, --gpus NUM_GPUS        Number of GPUs to use (default: 4)
@@ -20,6 +24,11 @@ NUM_GPUS="$DEFAULT_GPUS"
 
 show_help() {
     echo "Ultravox Finetuning Setup Script"
+    echo ""
+    echo "Prerequisites:"
+    echo "  Clone the repository first:"
+    echo "    git clone https://github.com/tinaghimire/Ultravox-finetuning.git"
+    echo "  Then run this script from the parent directory or inside Ultravox-finetuning/"
     echo ""
     echo "Usage: $0 [OPTIONS]"
     echo ""
@@ -104,15 +113,20 @@ main() {
     sudo apt update
     sudo apt upgrade -y
     
-    # Clone repository
-    if [ ! -d "Ultravox-finetuning" ]; then
-        print_status "Cloning Ultravox-finetuning repository..."
-        git clone https://github.com/tinaghimire/Ultravox-finetuning.git
+    # Navigate to Ultravox-finetuning directory
+    # Check if we're already in the directory
+    if [[ "$(basename "$PWD")" == "Ultravox-finetuning" ]]; then
+        print_status "Already in Ultravox-finetuning directory"
+    elif [ -d "Ultravox-finetuning" ]; then
+        print_status "Found Ultravox-finetuning directory, navigating to it..."
+        cd Ultravox-finetuning/
     else
-        print_warning "Ultravox-finetuning directory already exists, skipping clone..."
+        print_error "Ultravox-finetuning directory not found!"
+        print_error "Please clone the repository first:"
+        print_error "  git clone https://github.com/tinaghimire/Ultravox-finetuning.git"
+        print_error "Or run this script from inside the Ultravox-finetuning directory"
+        exit 1
     fi
-    
-    cd Ultravox-finetuning/
     
     # Install just
     print_status "Installing 'just' command runner..."
