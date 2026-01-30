@@ -1,29 +1,26 @@
 #!/bin/bash
 
-# Ultravox Finetuning Setup Script
-# This script automates the setup process for Ultravox finetuning environment
+# Ultravox Evaluation Setup Script
+# This script automates the setup process for Ultravox evaluation environment
 #
 # Prerequisites:
 #   - Clone the repository first: git clone https://github.com/tinaghimire/Ultravox-finetuning.git
 #   - Run this script from the parent directory or inside Ultravox-finetuning/
 #
-# Usage: ./setup_ultravox.sh [OPTIONS]
-#   -c, --config CONFIG_PATH    Path to training config file (default: ultravox/training/configs/hausa_stage1_projector.yaml)
-#   -g, --gpus NUM_GPUS        Number of GPUs to use (default: 4)
+# Usage: ./eval_ultravox.sh [OPTIONS]
+#   -c, --config CONFIG_PATH    Path to evaluation config file (default: ultravox/evaluation/configs/eval_config_hausa.yaml)
 #   -h, --help                 Show this help message
 
 set -e  # Exit on error
 
 # Default values
-DEFAULT_CONFIG="ultravox/training/configs/hausa_stage1_projector.yaml"
-DEFAULT_GPUS=4
+DEFAULT_CONFIG="ultravox/evaluation/configs/eval_config_hausa.yaml"
 
 # Parse command line arguments
 CONFIG_PATH="$DEFAULT_CONFIG"
-NUM_GPUS="$DEFAULT_GPUS"
 
 show_help() {
-    echo "Ultravox Finetuning Setup Script"
+    echo "Ultravox Evaluation Setup Script"
     echo ""
     echo "Prerequisites:"
     echo "  Clone the repository first:"
@@ -33,13 +30,12 @@ show_help() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  -c, --config CONFIG_PATH    Path to training config file"
+    echo "  -c, --config CONFIG_PATH    Path to evaluation config file"
     echo "                              (default: $DEFAULT_CONFIG)"
-    echo "  -g, --gpus NUM_GPUS        Number of GPUs to use (default: $DEFAULT_GPUS)"
     echo "  -h, --help                 Show this help message"
     echo ""
     echo "Example:"
-    echo "  $0 --config ultravox/training/configs/my_config.yaml --gpus 8"
+    echo "  $0 --config ultravox/evaluation/configs/eval_config_hausa.yaml"
     exit 0
 }
 
@@ -47,10 +43,6 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         -c|--config)
             CONFIG_PATH="$2"
-            shift 2
-            ;;
-        -g|--gpus)
-            NUM_GPUS="$2"
             shift 2
             ;;
         -h|--help)
@@ -63,12 +55,6 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
-
-# Validate NUM_GPUS is a positive integer
-if ! [[ "$NUM_GPUS" =~ ^[1-9][0-9]*$ ]]; then
-    print_error "Number of GPUs must be a positive integer, got: $NUM_GPUS"
-    exit 1
-fi
 
 # Color codes for output
 RED='\033[0;31m'
@@ -98,11 +84,10 @@ check_sudo() {
 
 # Main setup process
 main() {
-    print_status "Starting Ultravox Finetuning setup..."
+    print_status "Starting Ultravox Evaluation setup..."
     echo ""
     echo "Configuration:"
     echo "  Config file: $CONFIG_PATH"
-    echo "  Number of GPUs: $NUM_GPUS"
     echo ""
     
     # Check sudo access
@@ -302,18 +287,17 @@ EOF
     print_status "Logging into wandb..."
     echo "$WANDB_API_KEY" | wandb login --relogin
     
-    # Optional: Prefetch weights and start training
+    # Optional: Run evaluation
     echo ""
     echo "================================================"
-    echo "Would you like to start training now? (y/n)"
-    echo "Note: This will prefetch the model weights and start training"
+    echo "Would you like to start evaluation now? (y/n)"
+    echo "Note: This will run evaluation on the test set"
     echo "Config file: $CONFIG_PATH"
-    echo "Number of GPUs: $NUM_GPUS"
     echo "================================================"
-    read -r START_TRAINING
+    read -r START_EVAL
     
-    if [[ "$START_TRAINING" =~ ^[Yy]$ ]]; then
-        print_status "Starting training process..."
+    if [[ "$START_EVAL" =~ ^[Yy]$ ]]; then
+        print_status "Starting evaluation process..."
         
         # Verify config file exists
         if [ ! -f "$CONFIG_PATH" ]; then
@@ -321,27 +305,17 @@ EOF
             exit 1
         fi
         
-        # Step 1: Prefetch weights
-        print_status "Prefetching model weights..."
-        TRAIN_ARGS="--config_path $CONFIG_PATH"
-        echo "Running: poetry run python -m ultravox.training.helpers.prefetch_weights $TRAIN_ARGS"
-        poetry run python -m ultravox.training.helpers.prefetch_weights $TRAIN_ARGS
-        
-        # Step 2: Run training
-        print_status "Starting training with $NUM_GPUS GPUs..."
-        echo "Running: poetry run torchrun --nproc_per_node=$NUM_GPUS -m ultravox.training.train --config_path $CONFIG_PATH"
-        poetry run torchrun --nproc_per_node=$NUM_GPUS \
-            -m ultravox.training.train \
-            --config_path $CONFIG_PATH
+        # Run evaluation
+        print_status "Running evaluation..."
+        echo "Running: poetry run python -m ultravox.evaluation.eval --config_path $CONFIG_PATH"
+        poetry run python -m ultravox.evaluation.eval --config_path $CONFIG_PATH
     else
-        print_status "Skipping training. You can run it later with:"
+        print_status "Skipping evaluation. You can run it later with:"
         echo ""
         echo "  cd Ultravox-finetuning"
         echo "  source venv/bin/activate"
         echo "  set -a && source .env && set +a"
-        echo "  TRAIN_ARGS=\"--config_path $CONFIG_PATH\""
-        echo "  poetry run python -m ultravox.training.helpers.prefetch_weights \$TRAIN_ARGS"
-        echo "  poetry run torchrun --nproc_per_node=$NUM_GPUS -m ultravox.training.train --config_path $CONFIG_PATH"
+        echo "  poetry run python -m ultravox.evaluation.eval --config_path $CONFIG_PATH"
         echo ""
     fi
     
@@ -356,9 +330,12 @@ EOF
     echo "  source venv/bin/activate"
     echo "  set -a && source .env && set +a"
     echo ""
+    echo "To run evaluation manually:"
+    echo "  poetry run python -m ultravox.evaluation.eval --config_path $CONFIG_PATH"
+    echo ""
     echo "To run this script with custom settings:"
-    echo "  ./setup_ultravox.sh --config path/to/config.yaml --gpus 8"
-    echo "  ./setup_ultravox.sh --help    # Show all options"
+    echo "  ./eval_ultravox.sh --config path/to/eval_config.yaml"
+    echo "  ./eval_ultravox.sh --help    # Show all options"
     echo ""
     echo "Note: If pyenv or just commands are not found in new terminals,"
     echo "      restart your shell or run 'source ~/.bashrc'"

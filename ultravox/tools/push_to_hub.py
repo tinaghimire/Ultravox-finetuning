@@ -278,9 +278,18 @@ def main(args: UploadToHubArgs):
             # Upload checkpoint files with appropriate filtering
             # include_training_artifacts is True for last checkpoint, False for best model
             upload_checkpoint_files(last_checkpoint, args.hf_upload_model, args.private, include_training_artifacts=include_training_artifacts)
+            # For checkpoint uploads during training, we don't need to load and re-upload the model
+            # The checkpoint files already contain everything needed
+            logging.info("Checkpoint upload complete. Skipping model loading (checkpoint files already uploaded).")
+            return
         else:
             logging.info("No checkpoint directories found, proceeding with regular model upload")
     
+    # Only load model if we're not doing a simple checkpoint upload
+    # This path is used for:
+    # 1. Uploading a final trained model (not a checkpoint)
+    # 2. Uploading with text_only mode
+    # 3. Verification mode
     dtype = device_helpers.get_dtype(args.data_type)
     model = ultravox_model.UltravoxModel.from_pretrained(model_path, torch_dtype=dtype)
     model.merge_and_unload()
