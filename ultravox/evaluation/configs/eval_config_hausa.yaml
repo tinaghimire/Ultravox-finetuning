@@ -21,4 +21,4 @@ eval_temperature: 0.0  # Deterministic generation (greedy decoding)
 device: "cuda"
 data_type: "bfloat16"  # Use bfloat16 for A100 GPUs
 use_fsdp: false  # Evaluation doesn't use FSDP (loads model normally)
-
+use_tp: true
