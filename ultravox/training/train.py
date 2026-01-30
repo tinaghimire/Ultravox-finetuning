@@ -323,7 +323,7 @@ def train(config: config_base.TrainConfig):
             logging_dir=str(config.logs_dir),
             logging_steps=config.logging_steps,
             load_best_model_at_end=True,
-            metric_for_best_model="eval_loss",
+            metric_for_best_model="eval_hausa-huggingface-val_loss",
             greater_is_better=False,
             save_total_limit=3,
             # TODO (Farzad): reconsider for multi-node

@@ -19,7 +19,7 @@ class ModelModifierArgs:
     # Whether to push to hub (default: True)
     push_to_hub: bool = True
     # Private model (default: True)
-    private: bool = True
+    private: bool = False
 
 
 def modify_and_reupload_model(args: ModelModifierArgs):

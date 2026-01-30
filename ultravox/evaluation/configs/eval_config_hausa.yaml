@@ -2,7 +2,7 @@
 # Run separately after training completes (since do_eval: false with FSDP)
 # Usage: poetry run python -m ultravox.evaluation.eval --config_path ultravox/evaluation/configs/eval_config_hausa.yaml
 
-model: "./output/checkpoint-10000"  # Update with your trained checkpoint path (or HF Hub path)
+model: "hf://vaghawan/hausa-ultravox-stage-best"  # Update with your trained checkpoint path (or HF Hub path)
 
 report_logs_to: ["wandb"]
 output_dir: "./output/hausa_eval"
@@ -11,9 +11,9 @@ eval_sets:
   - name: hausa-huggingface-test  # Test split from HuggingFace dataset
 
 eval_dataset_args:
-  max_samples: -1  # Evaluate on all test samples, or set a limit like 1000
+  max_samples: 5  # Evaluate on all test samples, or set a limit like 1000
 
-eval_batch_size: 24  # Match training batch size for consistency
+eval_batch_size: 1  # Match training batch size for consistency 24
 eval_max_tokens: 512
 eval_temperature: 0.0  # Deterministic generation (greedy decoding)
 
